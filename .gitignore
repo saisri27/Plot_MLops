@@ -1,0 +1,55 @@
+# =============================================================================
+# Plot App — .gitignore
+# =============================================================================
+
+# !! CREDENTIALS — NEVER COMMIT THESE !!
+.env
+*.env
+!.env.example
+service-account*.json
+*-key.json
+credentials.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+.cache/
+
+# MLflow local artifacts
+mlruns/
+mlartifacts/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node / frontend
+node_modules/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Docker
+*.log
+
+# GCP
+.gcloud/

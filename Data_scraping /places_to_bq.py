@@ -230,6 +230,13 @@ TYPE_TO_CATEGORY: dict[str, str] = {
     "furniture_store": "Shopping",
     "store": "Shopping",
 
+    # Religious Places
+    "church": "Religious Places",
+    "hindu_temple": "Religious Places",
+    "mosque": "Religious Places",
+    "synagogue": "Religious Places",
+    "place_of_worship": "Religious Places",
+
     # Cute / Date Spots
     "bubble_tea": "Food & Drink",
     "chocolate_shop": "Food & Drink",
@@ -244,6 +251,13 @@ TYPE_TO_CATEGORY: dict[str, str] = {
     "vietnamese_restaurant": "Food & Drink",
     "vegan_restaurant": "Food & Drink",
     "vegetarian_restaurant": "Food & Drink",
+    "indian_restaurant": "Food & Drink",
+    "indian_cuisine": "Food & Drink",
+    "pakistani_restaurant": "Food & Drink",
+    "pakistani_cuisine": "Food & Drink",
+    "bangladeshi_restaurant": "Food & Drink",
+    "bangladeshi_cuisine": "Food & Drink",
+    "sri_lankan_restaurant": "Food & Drink"
 }
 
 # Generic types to ignore when resolving category
