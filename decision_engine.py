@@ -20,17 +20,16 @@ import logging
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
 
-from fastapi import FastAPI, HTTPException
+load_dotenv()  # loads .env from project root automatically; must run before modules
+# below that read env vars at import time (recommendation_bigquery, db).
 
-load_dotenv()  # loads .env from project root automatically
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from pydantic import BaseModel, Field  # noqa: E402
 
-# Imported after load_dotenv() because the module reads env vars at import time.
+from fastapi import FastAPI, HTTPException  # noqa: E402
 from recommendation_bigquery import fetch_venues_from_bigquery  # noqa: E402
 
-# Optional: Neon/Postgres feedback logging (gracefully skipped if DB not configured)
 try:
     from db import log_feedback, log_recommendation_request  # noqa: E402
 

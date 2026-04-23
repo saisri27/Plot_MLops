@@ -23,6 +23,9 @@ ignore = [
     "B008",  # FastAPI pattern: Depends() in defaults
 ]
 
+[tool.ruff.lint.isort]
+known-first-party = ["decision_engine", "recommendation_bigquery", "db"]
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
