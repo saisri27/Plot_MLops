@@ -17,21 +17,22 @@ Group preference merging logic:
 from __future__ import annotations
 
 import logging
-import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
 
-load_dotenv()  # loads .env from project root automatically
+load_dotenv()  # loads .env from project root automatically; must run before modules
+# below that read env vars at import time (recommendation_bigquery, db).
 
-from recommendation_bigquery import fetch_venues_from_bigquery
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from pydantic import BaseModel, Field  # noqa: E402
 
-# Optional: Neon/Postgres feedback logging (gracefully skipped if DB not configured)
+from fastapi import FastAPI, HTTPException  # noqa: E402
+from recommendation_bigquery import fetch_venues_from_bigquery  # noqa: E402
+
 try:
-    from db import log_feedback, log_recommendation_request
+    from db import log_feedback, log_recommendation_request  # noqa: E402
+
     DB_AVAILABLE = True
 except Exception:
     DB_AVAILABLE = False  # Set DATABASE_URL (Supabase) to enable
@@ -63,12 +64,12 @@ BUDGET_RANK = {"low": 1, "medium": 2, "high": 3}
 class UserPreference(BaseModel):
     user_id: str = Field(..., description="Unique user identifier")
     budget: str = Field(..., description="One of: low, medium, high")
-    categories: List[str] = Field(..., description="e.g. ['Food & Drink', 'Outdoors']")
+    categories: list[str] = Field(..., description="e.g. ['Food & Drink', 'Outdoors']")
     max_distance_km: float = Field(..., gt=0, description="Max travel distance in km")
 
 
 class RecommendRequest(BaseModel):
-    users: List[UserPreference] = Field(..., min_length=1, description="1–N users in the group")
+    users: list[UserPreference] = Field(..., min_length=1, description="1–N users in the group")
     top_k: int = Field(default=5, ge=1, le=20, description="How many results to return")
 
 
@@ -80,31 +81,32 @@ class VenueResult(BaseModel):
     price_level: str
     score: float
     reason: str
-    google_maps_uri: Optional[str] = None
-    editorial_summary: Optional[str] = None
+    google_maps_uri: str | None = None
+    editorial_summary: str | None = None
 
 
 class RecommendResponse(BaseModel):
     merged_budget: str
     merged_max_distance_km: float
-    merged_categories: List[str]
+    merged_categories: list[str]
     group_size: int
     venues_scored: int
-    recommendations: List[VenueResult]
+    recommendations: list[VenueResult]
 
 
 class FeedbackRequest(BaseModel):
     user_id: str
     venue_name: str
     accepted: bool = Field(..., description="True = user accepted, False = rejected")
-    request_context: Optional[Dict[str, Any]] = None
+    request_context: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
 # Group Preference Merging
 # ---------------------------------------------------------------------------
 
-def merge_preferences(users: List[UserPreference]) -> dict:
+
+def merge_preferences(users: list[UserPreference]) -> dict:
     """
     Merge N users' preferences into one set of query parameters.
 
@@ -124,7 +126,7 @@ def merge_preferences(users: List[UserPreference]) -> dict:
     merged_max_distance = min(u.max_distance_km for u in users)
 
     # Categories: union with weights (how many users want each category)
-    category_counts: Dict[str, int] = {}
+    category_counts: dict[str, int] = {}
     for user in users:
         for cat in user.categories:
             category_counts[cat] = category_counts.get(cat, 0) + 1
@@ -144,6 +146,7 @@ def merge_preferences(users: List[UserPreference]) -> dict:
 # ---------------------------------------------------------------------------
 # Scoring
 # ---------------------------------------------------------------------------
+
 
 def budget_match_score(venue_price: str, user_budget: str) -> float:
     """
@@ -169,10 +172,10 @@ def distance_score(distance_km: float, max_distance_km: float) -> float:
 
 
 def compute_score(
-    venue: Dict[str, Any],
+    venue: dict[str, Any],
     merged_budget: str,
     merged_max_distance: float,
-    category_weights: Dict[str, float],
+    category_weights: dict[str, float],
 ) -> tuple[float, str]:
     """
     Weighted scoring formula:
@@ -183,10 +186,10 @@ def compute_score(
 
     Returns (score: float, reason: str)
     """
-    rating_component    = (venue.get("rating") or 0.0) / 5.0
-    category_component  = category_weights.get(venue.get("category", ""), 0.0)
-    budget_component    = budget_match_score(venue.get("price_level", "medium"), merged_budget)
-    distance_component  = distance_score(venue.get("distance_km", 999), merged_max_distance)
+    rating_component = (venue.get("rating") or 0.0) / 5.0
+    category_component = category_weights.get(venue.get("category", ""), 0.0)
+    budget_component = budget_match_score(venue.get("price_level", "medium"), merged_budget)
+    distance_component = distance_score(venue.get("distance_km", 999), merged_max_distance)
 
     total = (
         0.40 * rating_component
@@ -220,6 +223,7 @@ def compute_score(
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
 
 @app.get("/")
 def root():
@@ -263,14 +267,17 @@ def recommend(request: RecommendRequest):
     """
     # 1. Merge group preferences
     merged = merge_preferences(request.users)
-    merged_budget       = merged["merged_budget"]
+    merged_budget = merged["merged_budget"]
     merged_max_distance = merged["merged_max_distance"]
-    category_weights    = merged["category_weights"]
-    all_categories      = merged["all_categories"]
+    category_weights = merged["category_weights"]
+    all_categories = merged["all_categories"]
 
     logger.info(
         "Recommend request | group_size=%d | budget=%s | max_dist=%.1f km | categories=%s",
-        len(request.users), merged_budget, merged_max_distance, all_categories,
+        len(request.users),
+        merged_budget,
+        merged_max_distance,
+        all_categories,
     )
 
     # 2. Fetch venues from BigQuery
@@ -281,7 +288,7 @@ def recommend(request: RecommendRequest):
         )
     except Exception as exc:
         logger.exception("BigQuery fetch failed: %s", exc)
-        raise HTTPException(status_code=503, detail=f"BigQuery error: {exc}")
+        raise HTTPException(status_code=503, detail=f"BigQuery error: {exc}") from exc
 
     if not venues:
         return RecommendResponse(
@@ -294,11 +301,9 @@ def recommend(request: RecommendRequest):
         )
 
     # 3. Score every venue
-    scored: List[Dict[str, Any]] = []
+    scored: list[dict[str, Any]] = []
     for venue in venues:
-        score, reason = compute_score(
-            venue, merged_budget, merged_max_distance, category_weights
-        )
+        score, reason = compute_score(venue, merged_budget, merged_max_distance, category_weights)
         scored.append({**venue, "score": score, "reason": reason})
 
     # 4. Rank and return top_k
@@ -354,4 +359,4 @@ def feedback(request: FeedbackRequest):
         return {"status": "accepted", "stored": True}
     except Exception as exc:
         logger.exception("Failed to log feedback: %s", exc)
-        raise HTTPException(status_code=500, detail=f"DB write failed: {exc}")
+        raise HTTPException(status_code=500, detail=f"DB write failed: {exc}") from exc

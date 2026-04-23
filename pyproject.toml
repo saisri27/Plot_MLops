@@ -1,0 +1,30 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [
+    "mlruns",
+    "demo",
+    "FastAPI",
+    "Data_scraping ",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes (unused imports, undefined names)
+    "B",   # flake8-bugbear (common bugs)
+    "UP",  # pyupgrade (modern syntax)
+    "SIM", # flake8-simplify
+    # Note: isort (`I`) intentionally omitted — its detection of first-party
+    # packages varies across environments (local vs CI), causing spurious
+    # failures. `F` still catches unused imports, which is the bug-causing rule.
+]
+ignore = [
+    "E501",  # line-too-long handled by formatter
+    "B008",  # FastAPI pattern: Depends() in defaults
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

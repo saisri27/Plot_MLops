@@ -5,7 +5,6 @@ from __future__ import annotations
 import sys
 import types
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -49,10 +48,10 @@ pytest.importorskip("dotenv")
 
 import decision_engine as de  # noqa: E402
 
-
 # ---------------------------------------------------------------------------
 # budget_match_score
 # ---------------------------------------------------------------------------
+
 
 def test_budget_match_exact():
     assert de.budget_match_score("medium", "medium") == 1.0
@@ -71,6 +70,7 @@ def test_budget_match_two_tiers_off():
 # distance_score
 # ---------------------------------------------------------------------------
 
+
 def test_distance_score_within_range():
     assert de.distance_score(2.0, 10.0) == pytest.approx(0.8, rel=1e-3)
 
@@ -87,10 +87,9 @@ def test_distance_score_at_max_is_zero():
 # merge_preferences
 # ---------------------------------------------------------------------------
 
+
 def _user(uid: str, budget: str, cats, dist):
-    return de.UserPreference(
-        user_id=uid, budget=budget, categories=cats, max_distance_km=dist
-    )
+    return de.UserPreference(user_id=uid, budget=budget, categories=cats, max_distance_km=dist)
 
 
 def test_merge_picks_most_conservative_budget_and_min_distance():
@@ -115,6 +114,7 @@ def test_merge_picks_most_conservative_budget_and_min_distance():
 # ---------------------------------------------------------------------------
 # compute_score
 # ---------------------------------------------------------------------------
+
 
 def test_compute_score_perfect_match_high_rating():
     venue = {
