@@ -1,0 +1,28 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [
+    "mlruns",
+    "demo",
+    "FastAPI",
+    "Data_scraping ",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes (unused imports, undefined names)
+    "I",   # isort (import ordering)
+    "B",   # flake8-bugbear (common bugs)
+    "UP",  # pyupgrade (modern syntax)
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "E501",  # line-too-long handled by formatter
+    "B008",  # FastAPI pattern: Depends() in defaults
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

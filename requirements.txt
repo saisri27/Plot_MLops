@@ -23,3 +23,7 @@ python-dotenv>=1.0.0
 
 # CI / local tests
 pytest>=8.0.0
+
+# Dev tooling (lint/format/pre-commit)
+ruff>=0.15.11
+pre-commit>=3.7.0
