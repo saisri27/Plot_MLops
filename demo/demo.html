@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Plot — Group Hangout Demo</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  :root {
+    --bg: #fbf6ee;          /* warm cream */
+    --panel: #ffffff;       /* card */
+    --ink: #2b2118;         /* deep brown text */
+    --muted: #8a7a6b;       /* warm grey */
+    --line: #ece2d2;        /* hairline */
+    --accent: #d96b3c;      /* terracotta orange */
+    --accent-2: #f5b347;    /* peachy yellow */
+    --sage: #9ec7a8;        /* sage green */
+    --lilac: #c8c1ef;       /* soft purple */
+    --coral: #ff7a59;       /* bright coral */
+    --shadow: 0 6px 18px rgba(43, 33, 24, 0.08);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px; background:
+      radial-gradient(900px 500px at 90% -10%, rgba(255,122,89,0.10), transparent 60%),
+      radial-gradient(700px 400px at -10% 110%, rgba(200,193,239,0.18), transparent 60%),
+      var(--bg);
+    color: var(--ink);
+    font-family: 'Segoe UI', system-ui, -apple-system, "Helvetica Neue", sans-serif;
+  }
+
+  /* Header band */
+  .hero {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 14px 18px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 18px; box-shadow: var(--shadow); margin-bottom: 22px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand .pin {
+    width: 26px; height: 26px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #fff 0 4px, var(--accent) 5px 100%);
+    box-shadow: 0 2px 0 rgba(0,0,0,0.05);
+  }
+  .brand h1 { font-size: 1.4rem; margin: 0; letter-spacing: -.5px; }
+  .brand small { color: var(--muted); }
+  .badges { display: flex; gap: 8px; }
+  .badge {
+    background: #fff; border: 1px solid var(--line); color: var(--ink);
+    padding: 6px 12px; border-radius: 999px; font-size: .8rem;
+  }
+  .badge.sf { background: #fff7ee; border-color: #f1d8b5; color: #a64d22; }
+  .badge.fun { background: #f4f0ff; border-color: #ddd5ff; color: #5b4bb1; }
+
+  .subtitle { color: var(--muted); margin: 0 4px 18px; }
+
+  /* Controls row */
+  .row { display: flex; gap: 12px; align-items: end; margin: 14px 0 22px; flex-wrap: wrap; }
+  .row label { margin: 0; color: var(--muted); font-size: .8rem; }
+
+  /* Cards */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--panel); border-radius: 18px; padding: 18px 20px;
+    border: 1px solid var(--line); box-shadow: var(--shadow);
+    position: relative; overflow: hidden;
+  }
+  .card::before {
+    content: ""; position: absolute; right: -30px; top: -30px;
+    width: 90px; height: 90px; border-radius: 50%;
+    background: radial-gradient(circle at 30% 30%, var(--accent-2), transparent 70%);
+    opacity: .55;
+  }
+  .card h3 { margin: 0 0 10px; color: var(--ink); font-size: 1rem; font-weight: 700; }
+  .card h3 small { color: var(--muted); font-weight: 500; }
+
+  label { display: block; font-size: .82rem; color: var(--muted); margin: 10px 0 4px; }
+  select, input[type=number], input[type=text] {
+    width: 100%; padding: 9px 11px; border-radius: 12px; background: #fff;
+    color: var(--ink); border: 1px solid var(--line); font-size: .9rem;
+  }
+  select:focus, input:focus { outline: 2px solid rgba(217,107,60,0.25); border-color: var(--accent); }
+
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+
+  .cats { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    border: 1px solid var(--line); background: #fff; padding: 6px 11px;
+    border-radius: 999px; font-size: .78rem; color: var(--ink);
+    cursor: pointer; user-select: none; transition: all .15s ease;
+  }
+  .chip:hover { transform: translateY(-1px); box-shadow: 0 2px 0 rgba(0,0,0,0.05); }
+  .chip.on {
+    background: var(--sage); border-color: #7cae89; color: #1d3a26; font-weight: 600;
+  }
+
+  /* Per-card vibe accents */
+  #users .card:nth-child(1)::before { background: radial-gradient(circle at 30% 30%, var(--accent-2), transparent 70%); }
+  #users .card:nth-child(2)::before { background: radial-gradient(circle at 30% 30%, var(--lilac), transparent 70%); }
+  #users .card:nth-child(3)::before { background: radial-gradient(circle at 30% 30%, var(--sage), transparent 70%); }
+  #users .card:nth-child(4)::before { background: radial-gradient(circle at 30% 30%, var(--coral), transparent 70%); }
+
+  /* Button */
+  button {
+    background: var(--accent); color: #fff; border: 0; padding: 11px 20px;
+    border-radius: 999px; font-weight: 700; cursor: pointer; font-size: .95rem;
+    box-shadow: 0 4px 0 rgba(133, 60, 25, 0.15);
+    transition: transform .08s ease, box-shadow .08s ease;
+  }
+  button:hover { transform: translateY(-1px); }
+  button:active { transform: translateY(1px); box-shadow: 0 2px 0 rgba(133, 60, 25, 0.15); }
+  button:disabled { opacity: .6; cursor: not-allowed; }
+
+  .meta { color: var(--muted); font-size: .85rem; margin: 8px 0 16px; }
+
+  /* Results */
+  .venues { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; margin-top: 12px; }
+  .venue {
+    background: var(--panel); border-radius: 16px; padding: 14px 16px;
+    border: 1px solid var(--line); box-shadow: var(--shadow);
+  }
+  .venue h4 { margin: 0 0 6px; color: var(--ink); font-size: 1rem; }
+  .pill {
+    display: inline-block; background: #fff7ee; color: #a64d22;
+    border: 1px solid #f1d8b5; padding: 2px 8px; border-radius: 999px;
+    font-size: .72rem; margin-right: 6px;
+  }
+  .pill:nth-of-type(2) { background: #f4f0ff; color: #5b4bb1; border-color: #ddd5ff; }
+  .pill:nth-of-type(3) { background: #fff4d6; color: #946417; border-color: #f3dfa1; }
+  .pill:nth-of-type(4) { background: #eaf4ec; color: #2f6b3c; border-color: #cde6d2; }
+  .score { color: var(--accent); font-weight: 700; }
+  .reason { color: var(--muted); font-size: .85rem; margin-top: 6px; font-style: italic; }
+  a { color: var(--accent); text-decoration: none; font-weight: 600; }
+  a:hover { text-decoration: underline; }
+  .error { color: #8a2b1d; background: #ffe7e0; padding: 10px 12px; border-radius: 12px; margin-top: 12px; border: 1px solid #f7c2b3; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="brand">
+    <span class="pin" aria-hidden="true"></span>
+    <div>
+      <h1>Plot</h1>
+      <small>Group hangout planner — fun stuff to do with friends</small>
+    </div>
+  </div>
+  <div class="badges">
+    <span class="badge sf">🌉 Made for SF</span>
+    <span class="badge fun">✨ Demo</span>
+  </div>
+</header>
+
+<div class="subtitle">3 friends, 3 vibes. Set budget, distance, and what you're feeling — Plot picks venues that work for everyone.</div>
+
+<div class="row">
+  <div>
+    <label>API URL</label>
+    <input id="apiUrl" type="text" value="http://127.0.0.1:8080/recommend" style="width: 360px;" />
+  </div>
+  <div>
+    <label>Top K</label>
+    <input id="topK" type="number" min="1" max="20" value="5" style="width: 100px;" />
+  </div>
+  <button id="go">Find our spot ✨</button>
+</div>
+
+<div class="grid" id="users"></div>
+
+<div id="status" class="meta"></div>
+<div id="output"></div>
+
+<script>
+const CATEGORIES = [
+  "Food & Drink","Outdoors","Entertainment","Arts & Culture",
+  "Nightlife","Sports & Recreation","Wellness & Beauty",
+  "Shopping","Classes & Workshops","Pets & Animals","Religious Places"
+];
+const USERS = [
+  { id: "user_1", name: "Sai",    budget: "medium", distance: 5, cats: new Set(["Food & Drink"]) },
+  { id: "user_2", name: "PJ",     budget: "low",    distance: 3, cats: new Set(["Outdoors"]) },
+  { id: "user_3", name: "Arushi", budget: "high",   distance: 8, cats: new Set(["Food & Drink","Entertainment"]) },
+  { id: "user_4", name: "Josh",   budget: "medium", distance: 6, cats: new Set(["Arts & Culture"]) },
+];
+
+function renderUsers() {
+  const root = document.getElementById("users");
+  root.innerHTML = "";
+  USERS.forEach((u, i) => {
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `
+      <h3>${u.name} <small>(${u.id})</small></h3>
+      <label>Budget</label>
+      <select data-idx="${i}" data-field="budget">
+        <option value="low" ${u.budget==='low'?'selected':''}>low</option>
+        <option value="medium" ${u.budget==='medium'?'selected':''}>medium</option>
+        <option value="high" ${u.budget==='high'?'selected':''}>high</option>
+      </select>
+      <label>Max distance (km): <span id="d${i}">${u.distance}</span></label>
+      <input type="range" min="1" max="15" value="${u.distance}" data-idx="${i}" data-field="distance" style="width:100%" />
+      <label>Categories</label>
+      <div class="cats" data-idx="${i}">
+        ${CATEGORIES.map(c => `<span class="chip ${u.cats.has(c)?'on':''}" data-cat="${c}">${c}</span>`).join("")}
+      </div>
+    `;
+    root.appendChild(card);
+  });
+
+  root.querySelectorAll("select[data-field=budget]").forEach(el => {
+    el.addEventListener("change", e => {
+      USERS[+e.target.dataset.idx].budget = e.target.value;
+    });
+  });
+  root.querySelectorAll("input[data-field=distance]").forEach(el => {
+    el.addEventListener("input", e => {
+      const i = +e.target.dataset.idx;
+      USERS[i].distance = +e.target.value;
+      document.getElementById("d" + i).textContent = e.target.value;
+    });
+  });
+  root.querySelectorAll(".cats").forEach(container => {
+    container.addEventListener("click", e => {
+      if (!e.target.classList.contains("chip")) return;
+      const i = +container.dataset.idx;
+      const cat = e.target.dataset.cat;
+      if (USERS[i].cats.has(cat)) {
+        USERS[i].cats.delete(cat);
+        e.target.classList.remove("on");
+      } else {
+        USERS[i].cats.add(cat);
+        e.target.classList.add("on");
+      }
+    });
+  });
+}
+
+async function recommend() {
+  const apiUrl = document.getElementById("apiUrl").value.trim();
+  const topK = +document.getElementById("topK").value || 5;
+  const status = document.getElementById("status");
+  const output = document.getElementById("output");
+  output.innerHTML = "";
+  status.textContent = "Calling API...";
+
+  const body = {
+    top_k: topK,
+    users: USERS.map(u => ({
+      user_id: u.id,
+      budget: u.budget,
+      max_distance_km: u.distance,
+      categories: Array.from(u.cats),
+    })),
+  };
+
+  try {
+    const resp = await fetch(apiUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const text = await resp.text();
+    if (!resp.ok) {
+      status.innerHTML = `<div class="error">API ${resp.status}: ${text}</div>`;
+      return;
+    }
+    const data = JSON.parse(text);
+    renderResult(data);
+    status.textContent = `Scored ${data.venues_scored} venues. Showing top ${data.recommendations.length}.`;
+  } catch (err) {
+    status.innerHTML = `<div class="error">Network error: ${err.message}. Is FastAPI running on ${apiUrl}?</div>`;
+  }
+}
+
+function renderResult(data) {
+  const output = document.getElementById("output");
+  const merged = `
+    <div class="card" style="margin-top:16px">
+      <h3>Group agreement</h3>
+      <div><span class="pill">budget</span>${data.merged_budget}
+           <span class="pill" style="margin-left:12px">max distance</span>${data.merged_max_distance_km} km
+           <span class="pill" style="margin-left:12px">size</span>${data.group_size}</div>
+      <div class="meta">categories: ${data.merged_categories.map(c=>`<span class="pill">${c}</span>`).join(" ")}</div>
+    </div>
+  `;
+  const venues = `
+    <div class="venues">
+      ${data.recommendations.map(v => `
+        <div class="venue">
+          <h4>${v.name}</h4>
+          <div>
+            <span class="pill">${v.category}</span>
+            <span class="pill">${v.price_level}</span>
+            <span class="pill">${v.rating?.toFixed?.(1) ?? v.rating} ⭐</span>
+            <span class="pill">${v.distance_km?.toFixed?.(2) ?? v.distance_km} km</span>
+            <span class="score">score ${v.score}</span>
+          </div>
+          <div class="reason">${v.reason}</div>
+          ${v.google_maps_uri ? `<div class="meta"><a href="${v.google_maps_uri}" target="_blank">Open in Google Maps</a></div>` : ""}
+        </div>
+      `).join("")}
+    </div>
+  `;
+  output.innerHTML = merged + venues;
+}
+
+document.getElementById("go").addEventListener("click", recommend);
+renderUsers();
+</script>
+</body>
+</html>

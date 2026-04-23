@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 load_dotenv()  # loads .env from project root automatically
@@ -42,6 +43,14 @@ app = FastAPI(
     title="Plot Decision Engine",
     description="Recommends venues and events for group hangouts",
     version="0.3.0",
+)
+
+# Permissive CORS for local demo pages (demo.html). Tighten in production.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # ---------------------------------------------------------------------------
