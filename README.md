@@ -6,7 +6,7 @@ Built as an MLOps class project. See [INFRASTRUCTURE.md](INFRASTRUCTURE.md) for 
 
 ---
 
-## Current state — Week 2 complete
+## Current state
 
 - System design doc ([INFRASTRUCTURE.md](INFRASTRUCTURE.md))
 - **Decision Engine** FastAPI service: `/health`, `/recommend`, `/feedback` ([decision_engine.py](decision_engine.py))
@@ -96,21 +96,3 @@ CI runs lint + unit tests automatically on every push and pull request. BigQuery
 Three-layer: **Frontend** (React, browser) → **API** (FastAPI Decision Engine on Cloud Run) → **Data** (BigQuery venues/events + Supabase users/feedback + MLflow model registry). Full diagram and per-component justification in [INFRASTRUCTURE.md](INFRASTRUCTURE.md).
 
 ---
-
-## Contributing
-
-- Create feature branches off `main` (e.g. `yourname/feature-name`)
-- Install the pre-commit hook: `pre-commit install` — every commit auto-runs ruff
-- Open a PR against `main`. CI must pass (lint + tests) before merging
-- Keep PR titles in conventional-commit style: `feat:`, `fix:`, `chore:`, `docs:`, `style:`, `test:`
-
----
-
-## Team
-
-- **Patrick** — infrastructure design, system architecture, GCP stack
-- **Sai** — Decision Engine, BigQuery integration, CI + tests, demo UI
-- **[Teammate 3]** — data scraping pipelines
-- **[Teammate 4]** — [TBD]
-
-Fill in real contributions before the Week 2 slide deck.
