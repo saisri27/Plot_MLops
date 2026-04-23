@@ -1,0 +1,36 @@
+# Run tests on every push / PR to main.
+# BigQuery integration tests (tests/test_bigquery_integration.py) are skipped
+# unless RUN_BQ_INTEGRATION=1 and credentials exist — not required in CI by default.
+
+name: CI
+
+on:
+  push:
+    branches: [main, sai]
+  pull_request:
+    branches: [main, sai]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        env:
+          # Keep BigQuery integration tests skipped in CI (no ADC by default).
+          RUN_BQ_INTEGRATION: "0"
+        run: pytest tests/ -v
