@@ -53,4 +53,5 @@ jobs:
         env:
           # Keep BigQuery integration tests skipped in CI (no ADC by default).
           RUN_BQ_INTEGRATION: "0"
-        run: pytest tests/ -v
+        # `-m "not live"` skips tests marked @pytest.mark.live (real OpenAI calls).
+        run: pytest tests/ -v -m "not live"

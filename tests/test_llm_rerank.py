@@ -8,6 +8,7 @@ provided by the `make_fake_openai_client` fixture in conftest.py.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -258,3 +259,49 @@ def test_rerank_with_fewer_candidates_than_top_k(make_fake_openai_client):
     assert len(picks) == 2
     # Should still have called the LLM exactly once.
     assert client.chat.completions.create.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Refactor-safety: the prompt is actually loaded from prompts/<version>.txt,
+# not from a leftover inline string. This test pins the file-backed contract
+# so future edits can't silently revert.
+# ---------------------------------------------------------------------------
+
+
+def test_prompt_template_loaded_from_file(tmp_path, monkeypatch):
+    fake_dir = tmp_path / "prompts"
+    fake_dir.mkdir()
+    (fake_dir / "rerank_v1.txt").write_text(
+        "FAKE_TEMPLATE {numbered_candidate_list} {top_k} {merged_budget} "
+        "{merged_max_distance} {category_weights} {group_size}",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(lr, "PROMPTS_DIR", fake_dir)
+    monkeypatch.setattr(lr, "_PROMPT_TEMPLATE", lr._load_prompt_template())
+
+    prompt = lr._build_prompt(_candidates(), _merged_prefs(), group_size=2, top_k=3)
+    assert prompt.startswith("FAKE_TEMPLATE")
+
+
+# ---------------------------------------------------------------------------
+# Live integration test — runs only when explicitly enabled. Skipped in CI
+# via `pytest -m "not live"` and skipped locally if OPENAI_API_KEY is unset.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.live
+def test_rerank_live_openai_call():
+    if not os.getenv("OPENAI_API_KEY"):
+        pytest.skip("OPENAI_API_KEY not set; skipping live test.")
+
+    candidates = _candidates()
+    picks, meta = lr.rerank_venues(candidates, _merged_prefs(), group_size=2, top_k=2)
+
+    # Lenient check: real LLMs occasionally return fewer picks. As long as
+    # we got at least one valid pick and well-formed metadata, we're good.
+    assert 1 <= len(picks) <= 2
+    assert all(p.name in {c["name"] for c in candidates} for p in picks)
+    assert meta.input_tokens > 0
+    assert meta.output_tokens > 0
+    assert meta.cost_usd > 0
+    assert meta.latency_ms > 0

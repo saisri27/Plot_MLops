@@ -131,6 +131,15 @@
   a { color: var(--accent); text-decoration: none; font-weight: 600; }
   a:hover { text-decoration: underline; }
   .error { color: #8a2b1d; background: #ffe7e0; padding: 10px 12px; border-radius: 12px; margin-top: 12px; border: 1px solid #f7c2b3; }
+
+  /* Ranking-mode banner shown above results: which engine ranked them */
+  .rank-mode {
+    display: inline-block; padding: 6px 14px; border-radius: 999px;
+    font-size: .82rem; font-weight: 600; margin: 14px 0 6px;
+    border: 1px solid var(--line);
+  }
+  .rank-mode.llm  { background: #f4f0ff; color: #5b4bb1; border-color: #ddd5ff; }
+  .rank-mode.v0   { background: #fff7ee; color: #a64d22; border-color: #f1d8b5; }
 </style>
 </head>
 <body>
@@ -281,7 +290,11 @@ function renderResult(data) {
       <div class="meta">categories: ${data.merged_categories.map(c=>`<span class="pill">${c}</span>`).join(" ")}</div>
     </div>
   `;
+  const banner = data.used_llm
+    ? `<div class="rank-mode llm">LLM-ranked · ${data.llm_model ?? "?"} · ${data.llm_latency_ms ?? "?"}ms</div>`
+    : `<div class="rank-mode v0">Heuristic ranking (v0)</div>`;
   const venues = `
+    ${banner}
     <div class="venues">
       ${data.recommendations.map(v => `
         <div class="venue">
