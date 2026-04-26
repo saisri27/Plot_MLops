@@ -7,8 +7,9 @@ name: CI
 on:
   push:
     branches: [main, sai]
+  # Run CI on every PR regardless of base branch so stacked PRs (e.g. PR 2
+  # targeting PR 1's branch) still get test coverage before merge.
   pull_request:
-    branches: [main, sai]
 
 jobs:
   lint:
