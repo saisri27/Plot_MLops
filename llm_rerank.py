@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
@@ -42,28 +44,28 @@ PRICING_USD_PER_1M_TOKENS: dict[str, dict[str, float]] = {
     "gpt-4o": {"input": 2.50, "output": 10.00},
 }
 
-# PR 1 keeps the prompt inline. PR 2 will move this to prompts/rerank_v1.txt
-# so prompts can be versioned, A/B tested, and registered as MLflow artifacts.
-_INLINE_PROMPT_TEMPLATE = """You are a venue recommendation expert for group hangouts in San Francisco.
+# Anchor the prompt directory to this module so it works regardless of cwd
+# or container layout. PR 3 will accept a `prompt_version` param and load
+# different files (rerank_v2.txt, etc.).
+PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 
-Group context:
-- Group size: {group_size} people
-- Budget: {merged_budget}
-- Max travel distance: {merged_max_distance} km
-- Category weights (fraction of group wanting each): {category_weights}
 
-Candidate venues (already pre-ranked by a heuristic scorer):
-{numbered_candidate_list}
+def _load_prompt_template(version: str = "rerank_v1") -> str:
+    """Read a prompt template by version. File IO is cheap; no caching."""
+    path = PROMPTS_DIR / f"{version}.txt"
+    return path.read_text(encoding="utf-8")
 
-Pick the top {top_k} venues for THIS group. For each pick, write one sentence
-explaining why it fits this specific group's preferences (mention budget,
-group size, category fit, or what makes it distinctive).
 
-You MUST only pick venues from the candidate list above. Use exact names.
+# Loaded once at import. Tests that need to override this can monkeypatch
+# PROMPTS_DIR and reload _PROMPT_TEMPLATE.
+_PROMPT_TEMPLATE = _load_prompt_template()
 
-Output JSON (and nothing else):
-{{"recommendations": [{{"name": "<exact name from list>", "reason": "..."}}, ...]}}
-"""
+# Module-level check so /recommend can skip the LLM entirely when the key
+# is missing — silent fallback to v0 with a one-time startup warning,
+# instead of burning a doomed API call per request.
+OPENAI_AVAILABLE: bool = bool(os.getenv("OPENAI_API_KEY"))
+if not OPENAI_AVAILABLE:
+    logger.warning("OPENAI_API_KEY not set — /recommend will fall back to v0 heuristic ranking.")
 
 
 class LLMRerankResult(BaseModel):
@@ -107,7 +109,7 @@ def _build_prompt(
     top_k: int,
 ) -> str:
     """Build the user-facing prompt string. Pure function — easy to unit test."""
-    return _INLINE_PROMPT_TEMPLATE.format(
+    return _PROMPT_TEMPLATE.format(
         group_size=group_size,
         merged_budget=merged_prefs.get("merged_budget", "medium"),
         merged_max_distance=merged_prefs.get("merged_max_distance", 5.0),

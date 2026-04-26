@@ -28,3 +28,8 @@ ignore = [
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+[tool.pytest.ini_options]
+markers = [
+    "live: integration tests that hit real external services (skipped in CI; run locally with --m live)",
+]
