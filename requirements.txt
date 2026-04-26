@@ -18,6 +18,9 @@ scikit-learn>=1.4.0
 pandas>=2.2.0
 numpy>=1.26.0
 
+# LLM reranking (Plot Decision Engine)
+openai>=1.40.0
+
 # Utilities
 python-dotenv>=1.0.0
 
