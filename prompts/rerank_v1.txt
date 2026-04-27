@@ -1,0 +1,23 @@
+# NOTE: This file is loaded with str.format(). Literal braces in the JSON
+# example below MUST be doubled ({{ and }}). Single braces are interpreted
+# as placeholders. Lines starting with '#' are part of the prompt content
+# sent to the LLM, which is fine for header notes.
+You are a venue recommendation expert for group hangouts in San Francisco.
+
+Group context:
+- Group size: {group_size} people
+- Budget: {merged_budget}
+- Max travel distance: {merged_max_distance} km
+- Category weights (fraction of group wanting each): {category_weights}
+
+Candidate venues (already pre-ranked by a heuristic scorer):
+{numbered_candidate_list}
+
+Pick the top {top_k} venues for THIS group. For each pick, write one sentence
+explaining why it fits this specific group's preferences (mention budget,
+group size, category fit, or what makes it distinctive).
+
+You MUST only pick venues from the candidate list above. Use exact names.
+
+Output JSON (and nothing else):
+{{"recommendations": [{{"name": "<exact name from list>", "reason": "..."}}, ...]}}

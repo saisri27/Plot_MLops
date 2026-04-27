@@ -169,16 +169,27 @@ def log_recommendation_request(
     merged_budget: str,
     categories: list[str],
     top_venue_names: list[str],
-) -> None:
-    """Log every /recommend call. Used for analytics and future feature engineering."""
+) -> int | None:
+    """
+    Log every /recommend call. Used for analytics and future feature engineering.
+
+    Returns the SERIAL id of the inserted row so /recommend can echo it back to
+    the client. PR 3's /feedback uses this id as a join key to reconstruct the
+    candidate set that produced an accepted/rejected pick.
+    Returns None if the INSERT did not produce an id (defensive — shouldn't
+    happen with a SERIAL PRIMARY KEY, but guards against driver edge cases).
+    """
     sql = """
         INSERT INTO recommendation_log (user_ids, merged_budget, categories, top_venues)
-        VALUES (%s, %s, %s, %s);
+        VALUES (%s, %s, %s, %s)
+        RETURNING id;
     """
     with _get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, (user_ids, merged_budget, categories, top_venue_names))
+            row = cur.fetchone()
         conn.commit()
+    return row[0] if row else None
 
 
 # ---------------------------------------------------------------------------

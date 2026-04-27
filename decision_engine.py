@@ -30,6 +30,11 @@ from pydantic import BaseModel, Field  # noqa: E402
 from fastapi import FastAPI, HTTPException  # noqa: E402
 from recommendation_bigquery import fetch_venues_from_bigquery  # noqa: E402
 
+# Module-level import (NOT `from llm_rerank import ...`) so test monkeypatches
+# of llm_rerank.OPENAI_AVAILABLE / llm_rerank.rerank_venues actually propagate
+# to the names this module reads at call time.
+import llm_rerank  # noqa: E402
+
 try:
     from db import log_feedback, log_recommendation_request  # noqa: E402
 
@@ -92,6 +97,13 @@ class RecommendResponse(BaseModel):
     group_size: int
     venues_scored: int
     recommendations: list[VenueResult]
+    # LLM rerank metadata. None when LLM was unavailable or failed → v0 fallback.
+    used_llm: bool = False
+    llm_model: str | None = None
+    prompt_version: str | None = None
+    llm_latency_ms: int | None = None
+    # Returned when DB_AVAILABLE; PR 3's /feedback uses this as a join key.
+    recommendation_log_id: int | None = None
 
 
 class FeedbackRequest(BaseModel):
@@ -221,6 +233,41 @@ def compute_score(
 
 
 # ---------------------------------------------------------------------------
+# LLM rerank merging
+# ---------------------------------------------------------------------------
+
+# How many v0 candidates are sent to the LLM. The LLM picks top_k of these.
+TOP_N_FOR_LLM = 20
+
+
+def _merge_llm_picks(
+    picks: list[llm_rerank.LLMRerankResult],
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """
+    Merge LLM picks (in LLM-rank order) with their matching v0 candidate dicts.
+
+    For each pick, look up the candidate by exact name match, overwrite the
+    'reason' field with the LLM's reason, and return the resulting list.
+
+    - Preserves all v0 fields (score, rating, distance_km, google_maps_uri,
+      editorial_summary, etc.) so VenueResult(**v) continues to work downstream.
+    - Preserves the v0 'score' field for analytics; LLM picks are ordered by
+      llm_rank, NOT by score.
+    - Names with no candidate match are skipped defensively (should not happen —
+      rerank_venues already filters hallucinations).
+    """
+    by_name = {c.get("name"): c for c in candidates}
+    merged: list[dict[str, Any]] = []
+    for pick in picks:
+        candidate = by_name.get(pick.name)
+        if candidate is None:
+            continue
+        merged.append({**candidate, "reason": pick.reason})
+    return merged
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
@@ -306,18 +353,44 @@ def recommend(request: RecommendRequest):
         score, reason = compute_score(venue, merged_budget, merged_max_distance, category_weights)
         scored.append({**venue, "score": score, "reason": reason})
 
-    # 4. Rank and return top_k
+    # 4. Rank and prepare LLM candidate set (top-N v0 picks)
     ranked = sorted(scored, key=lambda v: v["score"], reverse=True)
-    top = ranked[: request.top_k]
+    candidates = ranked[:TOP_N_FOR_LLM]
 
-    # 5. Optionally log request to DB for analytics / retraining
+    # 5. LLM rerank with v0 fallback
+    used_llm = False
+    llm_model: str | None = None
+    prompt_version: str | None = None
+    llm_latency_ms: int | None = None
+    final = candidates[: request.top_k]
+
+    if llm_rerank.OPENAI_AVAILABLE:
+        try:
+            llm_picks, llm_meta = llm_rerank.rerank_venues(
+                candidates, merged, len(request.users), request.top_k
+            )
+            if llm_picks:
+                final = _merge_llm_picks(llm_picks, candidates)
+                used_llm = True
+                llm_model = llm_meta.model
+                prompt_version = llm_meta.prompt_version
+                llm_latency_ms = llm_meta.latency_ms
+            else:
+                # Lenient mode: every pick was hallucinated. Fall through to v0.
+                logger.warning("LLM returned 0 valid picks; falling back to v0.")
+        except llm_rerank.LLMRerankError as exc:
+            logger.warning("LLM rerank failed, falling back to v0: %s", exc)
+    # else: missing OPENAI_API_KEY logged once at module import; quietly use v0.
+
+    # 6. Optionally log request to DB for analytics / retraining
+    rec_log_id: int | None = None
     if DB_AVAILABLE:
         try:
-            log_recommendation_request(
+            rec_log_id = log_recommendation_request(
                 user_ids=[u.user_id for u in request.users],
                 merged_budget=merged_budget,
                 categories=all_categories,
-                top_venue_names=[v["name"] for v in top],
+                top_venue_names=[v["name"] for v in final],
             )
         except Exception as exc:
             logger.warning("DB log failed (non-fatal): %s", exc)
@@ -328,7 +401,12 @@ def recommend(request: RecommendRequest):
         merged_categories=all_categories,
         group_size=len(request.users),
         venues_scored=len(scored),
-        recommendations=[VenueResult(**v) for v in top],
+        recommendations=[VenueResult(**v) for v in final],
+        used_llm=used_llm,
+        llm_model=llm_model,
+        prompt_version=prompt_version,
+        llm_latency_ms=llm_latency_ms,
+        recommendation_log_id=rec_log_id,
     )
 
 
