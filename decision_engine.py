@@ -31,7 +31,7 @@ from recommendation_bigquery import fetch_venues_from_bigquery
 
 # Optional: Neon/Postgres feedback logging (gracefully skipped if DB not configured)
 try:
-    from db import log_feedback, log_recommendation_request
+    from db import log_feedback, log_recommendation_request, upsert_user
     DB_AVAILABLE = True
 except Exception:
     DB_AVAILABLE = False  # Set DATABASE_URL (Supabase) to enable
@@ -85,18 +85,31 @@ class VenueResult(BaseModel):
 
 
 class RecommendResponse(BaseModel):
+    rec_id: Optional[int] = Field(
+        default=None,
+        description="ID of the recommendation_log row this response was logged to. "
+                    "Pass back to /feedback so we can join feedback ↔ exact rec.",
+    )
     merged_budget: str
     merged_max_distance_km: float
     merged_categories: List[str]
     group_size: int
     venues_scored: int
+    model_version: str = "rules_v1"
     recommendations: List[VenueResult]
 
 
 class FeedbackRequest(BaseModel):
     user_id: str
     venue_name: str
-    accepted: bool = Field(..., description="True = user accepted, False = rejected")
+    signal: str = Field(
+        default="yay",
+        description="One of: 'yay' (liked), 'nahh' (rejected), 'visited' (actually went)",
+    )
+    rec_id: Optional[int] = Field(
+        default=None,
+        description="ID returned from /recommend so feedback links back to the exact request.",
+    )
     request_context: Optional[Dict[str, Any]] = None
 
 
@@ -285,6 +298,7 @@ def recommend(request: RecommendRequest):
 
     if not venues:
         return RecommendResponse(
+            rec_id=None,
             merged_budget=merged_budget,
             merged_max_distance_km=merged_max_distance,
             merged_categories=all_categories,
@@ -305,24 +319,44 @@ def recommend(request: RecommendRequest):
     ranked = sorted(scored, key=lambda v: v["score"], reverse=True)
     top = ranked[: request.top_k]
 
-    # 5. Optionally log request to DB for analytics / retraining
+    # 5. Log request to DB for analytics / retraining and capture rec_id
+    rec_id: Optional[int] = None
     if DB_AVAILABLE:
+        # Best-effort: make sure each user_id exists in `users` so future joins
+        # / dashboards have something to reference. Failures are non-fatal.
+        for u in request.users:
+            try:
+                upsert_user(
+                    user_id=u.user_id,
+                    default_budget=u.budget,
+                    default_categories=u.categories,
+                    default_max_distance_km=u.max_distance_km,
+                )
+            except Exception as exc:
+                logger.warning("upsert_user(%s) failed (non-fatal): %s", u.user_id, exc)
         try:
-            log_recommendation_request(
+            rec_id = log_recommendation_request(
                 user_ids=[u.user_id for u in request.users],
                 merged_budget=merged_budget,
                 categories=all_categories,
                 top_venue_names=[v["name"] for v in top],
+                merged_max_distance_km=merged_max_distance,
+                group_size=len(request.users),
+                top_venues_payload=top,                              # full feature snapshot
+                request_context={"users": [u.model_dump() for u in request.users]},
+                model_version="rules_v1",
             )
         except Exception as exc:
             logger.warning("DB log failed (non-fatal): %s", exc)
 
     return RecommendResponse(
+        rec_id=rec_id,
         merged_budget=merged_budget,
         merged_max_distance_km=merged_max_distance,
         merged_categories=all_categories,
         group_size=len(request.users),
         venues_scored=len(scored),
+        model_version="rules_v1",
         recommendations=[VenueResult(**v) for v in top],
     )
 
@@ -330,14 +364,15 @@ def recommend(request: RecommendRequest):
 @app.post("/feedback")
 def feedback(request: FeedbackRequest):
     """
-    Log whether a user accepted or rejected a venue recommendation.
-    This feeds the retraining loop — stored in Neon Postgres.
+    Log a user's reaction to a recommended venue. This is the primary training
+    signal for the future Learning-to-Rank model.
 
     Example:
     {
-      "user_id": "user_001",
-      "venue_name": "Dolores Park Cafe",
-      "accepted": true
+      "user_id":   "user_1",
+      "rec_id":    42,                  # from /recommend response
+      "venue_name":"Dolores Park Cafe",
+      "signal":    "yay"                # 'yay' | 'nahh' | 'visited'
     }
     """
     if not DB_AVAILABLE:
@@ -345,13 +380,22 @@ def feedback(request: FeedbackRequest):
         return {"status": "accepted", "stored": False, "note": "DB not configured"}
 
     try:
-        log_feedback(
+        feedback_id = log_feedback(
             user_id=request.user_id,
             venue_name=request.venue_name,
-            accepted=request.accepted,
+            signal=request.signal,
+            rec_id=request.rec_id,
             context=request.request_context or {},
         )
-        return {"status": "accepted", "stored": True}
+        return {
+            "status": "accepted",
+            "stored": True,
+            "feedback_id": feedback_id,
+            "rec_id": request.rec_id,
+            "signal": request.signal,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.exception("Failed to log feedback: %s", exc)
         raise HTTPException(status_code=500, detail=f"DB write failed: {exc}")

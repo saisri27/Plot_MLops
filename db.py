@@ -77,27 +77,51 @@ CREATE TABLE IF NOT EXISTS users (
 
 -- Log every /recommend call (for analytics and retraining feature engineering)
 CREATE TABLE IF NOT EXISTS recommendation_log (
-    id              SERIAL PRIMARY KEY,
+    id              SERIAL PRIMARY KEY,            -- this is the rec_id used in feedback
     user_ids        TEXT[],                        -- all users in the group
     merged_budget   TEXT,
+    merged_max_distance_km FLOAT,
+    group_size      INTEGER,
     categories      TEXT[],
     top_venues      TEXT[],                        -- names of venues returned
+    top_venues_payload JSONB DEFAULT '[]',         -- full venue objects with score/features at time of rec
+    request_context JSONB DEFAULT '{}',            -- raw request payload (per-user prefs)
+    model_version   TEXT DEFAULT 'rules_v1',       -- which scorer produced this
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Migrations for recommendation_log when columns were added later (idempotent)
+ALTER TABLE recommendation_log ADD COLUMN IF NOT EXISTS merged_max_distance_km FLOAT;
+ALTER TABLE recommendation_log ADD COLUMN IF NOT EXISTS group_size INTEGER;
+ALTER TABLE recommendation_log ADD COLUMN IF NOT EXISTS top_venues_payload JSONB DEFAULT '[]';
+ALTER TABLE recommendation_log ADD COLUMN IF NOT EXISTS request_context JSONB DEFAULT '{}';
+ALTER TABLE recommendation_log ADD COLUMN IF NOT EXISTS model_version TEXT DEFAULT 'rules_v1';
 
 -- Log user feedback on individual venues (the ML training signal)
 CREATE TABLE IF NOT EXISTS feedback (
     id              SERIAL PRIMARY KEY,
-    user_id         TEXT REFERENCES users(user_id) ON DELETE SET NULL,
+    rec_id          INTEGER,                       -- FK → recommendation_log.id (the request that surfaced this venue)
+    user_id         TEXT,
     venue_name      TEXT NOT NULL,
-    accepted        BOOLEAN NOT NULL,             -- True = liked, False = rejected
-    context         JSONB DEFAULT '{}',           -- optional: budget/category context
+    signal          TEXT NOT NULL DEFAULT 'yay',   -- 'yay' | 'nahh' | 'visited'
+    accepted        BOOLEAN NOT NULL,              -- yay/visited = true, nahh = false
+    context         JSONB DEFAULT '{}',
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Index for fast feedback lookups by user
+-- Migrations for feedback when columns were added later (idempotent)
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS rec_id INTEGER;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS signal TEXT DEFAULT 'yay';
+
+-- Drop the old FK on feedback.user_id so we can log feedback for demo / mock /
+-- group-pseudo user_ids that don't exist in `users`. We can re-add a soft FK
+-- later once we have a real auth flow.
+ALTER TABLE feedback DROP CONSTRAINT IF EXISTS feedback_user_id_fkey;
+
+-- Indexes
 CREATE INDEX IF NOT EXISTS idx_feedback_user_id ON feedback(user_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_venue   ON feedback(venue_name);
+CREATE INDEX IF NOT EXISTS idx_feedback_rec_id  ON feedback(rec_id);
 """
 
 
@@ -166,16 +190,40 @@ def log_recommendation_request(
     merged_budget: str,
     categories: List[str],
     top_venue_names: List[str],
-) -> None:
-    """Log every /recommend call. Used for analytics and future feature engineering."""
+    merged_max_distance_km: Optional[float] = None,
+    group_size: Optional[int] = None,
+    top_venues_payload: Optional[List[Dict[str, Any]]] = None,
+    request_context: Optional[Dict[str, Any]] = None,
+    model_version: str = "rules_v1",
+) -> int:
+    """
+    Log every /recommend call. Used for analytics and future feature engineering.
+    Returns the new rec_id (recommendation_log.id) so the caller can echo it back
+    to the client and link feedback rows to this exact recommendation.
+    """
     sql = """
-        INSERT INTO recommendation_log (user_ids, merged_budget, categories, top_venues)
-        VALUES (%s, %s, %s, %s);
+        INSERT INTO recommendation_log
+            (user_ids, merged_budget, merged_max_distance_km, group_size,
+             categories, top_venues, top_venues_payload, request_context, model_version)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id;
     """
     with _get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, (user_ids, merged_budget, categories, top_venue_names))
+            cur.execute(sql, (
+                user_ids,
+                merged_budget,
+                merged_max_distance_km,
+                group_size,
+                categories,
+                top_venue_names,
+                json.dumps(top_venues_payload or []),
+                json.dumps(request_context or {}),
+                model_version,
+            ))
+            rec_id = cur.fetchone()[0]
         conn.commit()
+    return int(rec_id)
 
 
 # ---------------------------------------------------------------------------
@@ -185,38 +233,95 @@ def log_recommendation_request(
 def log_feedback(
     user_id: str,
     venue_name: str,
-    accepted: bool,
+    signal: str = "yay",
+    rec_id: Optional[int] = None,
     context: Optional[Dict[str, Any]] = None,
-) -> None:
+) -> int:
     """
-    Record whether a user accepted or rejected a recommended venue.
-    This is the core training signal for improving the ranker over time.
+    Record whether a user said yay/nahh/visited on a recommended venue.
+
+    Args:
+        user_id    : id of the user (or "group:..." for group-level feedback)
+        venue_name : the venue the feedback is about
+        signal     : 'yay' (liked), 'nahh' (rejected), or 'visited' (actually went)
+        rec_id     : id of the recommendation_log row this feedback links to
+        context    : optional extra info (e.g. {"score_at_rec": 0.83})
+
+    Returns the new feedback row id.
     """
+    signal = (signal or "yay").lower()
+    if signal not in {"yay", "nahh", "visited"}:
+        raise ValueError(f"Invalid signal '{signal}'. Use yay / nahh / visited.")
+    accepted = signal in {"yay", "visited"}
+
     sql = """
-        INSERT INTO feedback (user_id, venue_name, accepted, context)
-        VALUES (%s, %s, %s, %s);
+        INSERT INTO feedback (rec_id, user_id, venue_name, signal, accepted, context)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        RETURNING id;
     """
     with _get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, (
+                rec_id,
                 user_id,
                 venue_name,
+                signal,
                 accepted,
                 json.dumps(context or {}),
             ))
+            fid = cur.fetchone()[0]
         conn.commit()
+    return int(fid)
 
 
 def get_feedback_for_training() -> List[Dict[str, Any]]:
     """
     Fetch all feedback rows for use in ML training.
-    Returns list of dicts: {user_id, venue_name, accepted, context, created_at}
-    Use this in your training pipeline to build the (venue, user_prefs) → accepted label.
+    Returns list of dicts: {rec_id, user_id, venue_name, signal, accepted, context, created_at}
     """
     sql = """
-        SELECT user_id, venue_name, accepted, context, created_at
+        SELECT rec_id, user_id, venue_name, signal, accepted, context, created_at
         FROM feedback
         ORDER BY created_at DESC;
+    """
+    with _get_conn() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_training_join() -> List[Dict[str, Any]]:
+    """
+    Build the canonical (request_features, venue_features) -> label training rows
+    by joining recommendation_log with feedback on rec_id.
+
+    Each returned row is one (rec_id, venue_name, signal) sample with everything
+    the model needs about the request that produced it. The training script
+    (build_training_data.py) explodes top_venues_payload into per-venue features.
+    """
+    sql = """
+        SELECT
+            r.id                AS rec_id,
+            r.created_at        AS rec_created_at,
+            r.user_ids,
+            r.group_size,
+            r.merged_budget,
+            r.merged_max_distance_km,
+            r.categories        AS merged_categories,
+            r.top_venues_payload,
+            r.request_context,
+            r.model_version,
+            f.id                AS feedback_id,
+            f.user_id           AS feedback_user_id,
+            f.venue_name        AS feedback_venue_name,
+            f.signal            AS feedback_signal,
+            f.accepted          AS feedback_accepted,
+            f.context           AS feedback_context,
+            f.created_at        AS feedback_created_at
+        FROM recommendation_log r
+        LEFT JOIN feedback f ON f.rec_id = r.id
+        ORDER BY r.created_at DESC;
     """
     with _get_conn() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:

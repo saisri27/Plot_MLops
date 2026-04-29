@@ -39,22 +39,58 @@ BQ_DATASET = os.environ.get("BQ_DATASET", "places_raw").strip()
 BQ_TABLE = os.environ.get("BQ_TABLE", "places").strip()
 DEFAULT_QUERIES = os.environ.get(
     "SEARCH_QUERIES",
-    # Broad categories — combined with grid search these cover SF thoroughly
+    # Broad categories — combined with grid search these cover SF thoroughly.
+    # Add or remove queries here, or override with the SEARCH_QUERIES env var
+    # (semicolon-separated).
+    # ----- Food & Drink -----
     "restaurants in San Francisco;"
     "cafes in San Francisco;"
-    "bars in San Francisco;"
-    "parks in San Francisco;"
-    "museums in San Francisco;"
-    "nightlife in San Francisco;"
-    "things to do in San Francisco;"
-    "date spots in San Francisco;"
-    "dessert in San Francisco;"
     "brunch in San Francisco;"
+    "dessert in San Francisco;"
+    "boba in San Francisco;"
+    "ramen in San Francisco;"
+    "pizza in San Francisco;"
+    "sushi in San Francisco;"
+    "tacos in San Francisco;"
+    "ice cream in San Francisco;"
+    # ----- Bars & Nightlife -----
+    "bars in San Francisco;"
+    "wine bars in San Francisco;"
+    "cocktail bars in San Francisco;"
+    "speakeasies in San Francisco;"
+    "rooftop bars in San Francisco;"
+    "nightlife in San Francisco;"
     "live music in San Francisco;"
+    "karaoke in San Francisco;"
+    # ----- Outdoors -----
+    "parks in San Francisco;"
+    "viewpoints in San Francisco;"
+    "hiking trails in San Francisco;"
+    "beaches in San Francisco;"
+    "gardens in San Francisco;"
+    # ----- Arts & Culture -----
+    "museums in San Francisco;"
     "art galleries in San Francisco;"
     "bookstores in San Francisco;"
+    "movie theaters in San Francisco;"
+    # ----- Wellness & Beauty -----
     "spas in San Francisco;"
-    "bowling in San Francisco",
+    "yoga studios in San Francisco;"
+    "gyms in San Francisco;"
+    # ----- Entertainment -----
+    "things to do in San Francisco;"
+    "date spots in San Francisco;"
+    "bowling in San Francisco;"
+    "arcades in San Francisco;"
+    "escape rooms in San Francisco;"
+    "pool halls in San Francisco;"
+    # ----- Shopping & Markets -----
+    "farmers markets in San Francisco;"
+    "flower shops in San Francisco;"
+    # ----- Religious Places -----
+    "churches in San Francisco;"
+    "temples in San Francisco;"
+    "places of worship in San Francisco",
 ).strip()
 
 PLACES_URL = "https://places.googleapis.com/v1/places:searchText"
@@ -90,21 +126,48 @@ SF_GRID: list[dict] = [
 
 FIELD_MASK = ",".join(
     [
+        # Identity / location
         "places.id",
         "places.displayName",
         "places.formattedAddress",
+        "places.shortFormattedAddress",
         "places.location",
         "places.types",
+        "places.primaryType",
+        # Quality signal
         "places.rating",
         "places.userRatingCount",
         "places.businessStatus",
+        # Cost
         "places.priceLevel",
+        "places.priceRange",
+        # Contact / link
         "places.websiteUri",
         "places.nationalPhoneNumber",
         "places.googleMapsUri",
-        "places.primaryType",
         "places.editorialSummary",
+        # Hours
         "places.regularOpeningHours",
+        # Behavioural / vibe attributes (great future ML features)
+        "places.reservable",
+        "places.outdoorSeating",
+        "places.goodForGroups",
+        "places.goodForChildren",
+        "places.allowsDogs",
+        "places.liveMusic",
+        "places.dineIn",
+        "places.takeout",
+        "places.delivery",
+        # Meal / drink coverage
+        "places.servesBreakfast",
+        "places.servesLunch",
+        "places.servesDinner",
+        "places.servesBrunch",
+        "places.servesVegetarianFood",
+        "places.servesBeer",
+        "places.servesWine",
+        "places.servesCocktails",
+        # Pagination
         "nextPageToken",
     ]
 )
@@ -280,11 +343,13 @@ def resolve_category(primary_type: str | None, types: list[str]) -> str:
     return "Other"
 
 
-# BigQuery table schema — created automatically if missing
+# BigQuery table schema — created automatically if missing.
+# Columns added later are auto-applied to existing tables in ensure_table().
 BQ_SCHEMA = [
     bigquery.SchemaField("place_id", "STRING", mode="REQUIRED"),
     bigquery.SchemaField("display_name", "STRING"),
     bigquery.SchemaField("formatted_address", "STRING"),
+    bigquery.SchemaField("short_formatted_address", "STRING"),
     bigquery.SchemaField("latitude", "FLOAT"),
     bigquery.SchemaField("longitude", "FLOAT"),
     bigquery.SchemaField("distance_km", "FLOAT"),
@@ -292,6 +357,9 @@ BQ_SCHEMA = [
     bigquery.SchemaField("user_rating_count", "INTEGER"),
     bigquery.SchemaField("business_status", "STRING"),
     bigquery.SchemaField("price_level", "STRING"),
+    bigquery.SchemaField("price_range_start", "FLOAT"),
+    bigquery.SchemaField("price_range_end", "FLOAT"),
+    bigquery.SchemaField("price_range_currency", "STRING"),
     bigquery.SchemaField("primary_type", "STRING"),
     bigquery.SchemaField("category", "STRING"),
     bigquery.SchemaField("types", "STRING", mode="REPEATED"),
@@ -300,6 +368,24 @@ BQ_SCHEMA = [
     bigquery.SchemaField("google_maps_uri", "STRING"),
     bigquery.SchemaField("editorial_summary", "STRING"),
     bigquery.SchemaField("open_now_text", "STRING"),
+    # Vibe / behavioural attributes (added 2026-04 — features for ML ranker)
+    bigquery.SchemaField("reservable", "BOOLEAN"),
+    bigquery.SchemaField("outdoor_seating", "BOOLEAN"),
+    bigquery.SchemaField("good_for_groups", "BOOLEAN"),
+    bigquery.SchemaField("good_for_children", "BOOLEAN"),
+    bigquery.SchemaField("allows_dogs", "BOOLEAN"),
+    bigquery.SchemaField("live_music", "BOOLEAN"),
+    bigquery.SchemaField("dine_in", "BOOLEAN"),
+    bigquery.SchemaField("takeout", "BOOLEAN"),
+    bigquery.SchemaField("delivery", "BOOLEAN"),
+    bigquery.SchemaField("serves_breakfast", "BOOLEAN"),
+    bigquery.SchemaField("serves_lunch", "BOOLEAN"),
+    bigquery.SchemaField("serves_dinner", "BOOLEAN"),
+    bigquery.SchemaField("serves_brunch", "BOOLEAN"),
+    bigquery.SchemaField("serves_vegetarian_food", "BOOLEAN"),
+    bigquery.SchemaField("serves_beer", "BOOLEAN"),
+    bigquery.SchemaField("serves_wine", "BOOLEAN"),
+    bigquery.SchemaField("serves_cocktails", "BOOLEAN"),
     bigquery.SchemaField("search_query", "STRING"),
     bigquery.SchemaField("fetched_at", "TIMESTAMP"),
 ]
@@ -323,6 +409,15 @@ def haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
+def _money(amount: dict[str, Any] | None) -> float | None:
+    """Convert a Google `Money` object {units, nanos, currencyCode} to a float."""
+    if not amount:
+        return None
+    units = float(amount.get("units") or 0)
+    nanos = float(amount.get("nanos") or 0) / 1e9
+    return round(units + nanos, 2)
+
+
 def flatten_place(raw: dict[str, Any], query: str, ts: str) -> dict[str, Any]:
     """Turn one Places API JSON object into a flat dict matching BQ_SCHEMA."""
     loc = raw.get("location") or {}
@@ -342,25 +437,60 @@ def flatten_place(raw: dict[str, Any], query: str, ts: str) -> dict[str, Any]:
     primary_type = raw.get("primaryType")
     types = raw.get("types", [])
 
+    price_range = raw.get("priceRange") or {}
+    price_start = _money(price_range.get("startPrice"))
+    price_end   = _money(price_range.get("endPrice"))
+    price_curr  = (price_range.get("startPrice") or price_range.get("endPrice") or {}).get("currencyCode")
+
     return {
+        # Identity / location
         "place_id": raw.get("id"),
         "display_name": dn.get("text"),
         "formatted_address": raw.get("formattedAddress"),
+        "short_formatted_address": raw.get("shortFormattedAddress"),
         "latitude": lat,
         "longitude": lng,
         "distance_km": dist,
+        # Quality
         "rating": raw.get("rating"),
         "user_rating_count": raw.get("userRatingCount"),
         "business_status": raw.get("businessStatus"),
+        # Cost
         "price_level": raw.get("priceLevel"),
+        "price_range_start": price_start,
+        "price_range_end":   price_end,
+        "price_range_currency": price_curr,
+        # Type / category
         "primary_type": primary_type,
         "category": resolve_category(primary_type, types),
         "types": types,
+        # Contact / link
         "phone_number": raw.get("nationalPhoneNumber"),
         "website_uri": raw.get("websiteUri"),
         "google_maps_uri": raw.get("googleMapsUri"),
         "editorial_summary": summary.get("text"),
+        # Hours
         "open_now_text": open_now_text,
+        # Vibe / behavioural attributes — many will be None for places that
+        # don't publish them; that's fine, BigQuery stores NULL.
+        "reservable":           raw.get("reservable"),
+        "outdoor_seating":      raw.get("outdoorSeating"),
+        "good_for_groups":      raw.get("goodForGroups"),
+        "good_for_children":    raw.get("goodForChildren"),
+        "allows_dogs":          raw.get("allowsDogs"),
+        "live_music":           raw.get("liveMusic"),
+        "dine_in":              raw.get("dineIn"),
+        "takeout":              raw.get("takeout"),
+        "delivery":             raw.get("delivery"),
+        "serves_breakfast":     raw.get("servesBreakfast"),
+        "serves_lunch":         raw.get("servesLunch"),
+        "serves_dinner":        raw.get("servesDinner"),
+        "serves_brunch":        raw.get("servesBrunch"),
+        "serves_vegetarian_food": raw.get("servesVegetarianFood"),
+        "serves_beer":          raw.get("servesBeer"),
+        "serves_wine":          raw.get("servesWine"),
+        "serves_cocktails":     raw.get("servesCocktails"),
+        # Bookkeeping
         "search_query": query,
         "fetched_at": ts,
     }
@@ -403,7 +533,11 @@ def fetch_places(
 
 
 def ensure_table(client: bigquery.Client, table_ref: str) -> bigquery.Table:
-    """Create dataset + table if they don't exist yet."""
+    """
+    Create dataset + table if they don't exist. If the table already exists,
+    add any new columns from BQ_SCHEMA that aren't there yet (idempotent).
+    BigQuery only allows additive schema changes — that's exactly what we do.
+    """
     dataset_ref = f"{GCP_PROJECT}.{BQ_DATASET}"
     dataset = bigquery.Dataset(dataset_ref)
     dataset.location = "US"
@@ -411,14 +545,23 @@ def ensure_table(client: bigquery.Client, table_ref: str) -> bigquery.Table:
 
     try:
         table = client.get_table(table_ref)
-        return table
     except Exception:
-        pass
+        table = bigquery.Table(table_ref, schema=BQ_SCHEMA)
+        table = client.create_table(table)
+        print("Created new table — waiting 30s for BigQuery to be ready...")
+        time.sleep(30)
+        return table
 
-    table = bigquery.Table(table_ref, schema=BQ_SCHEMA)
-    table = client.create_table(table)
-    print("Created new table — waiting 30s for BigQuery to be ready...")
-    time.sleep(30)
+    # Table already exists: add any missing columns (additive migration).
+    existing = {f.name for f in table.schema}
+    new_fields = [f for f in BQ_SCHEMA if f.name not in existing]
+    if new_fields:
+        print(
+            f"Adding {len(new_fields)} new column(s) to {table_ref}: "
+            + ", ".join(f.name for f in new_fields)
+        )
+        table.schema = list(table.schema) + new_fields
+        table = client.update_table(table, ["schema"])
     return table
 
 
