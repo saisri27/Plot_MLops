@@ -307,9 +307,7 @@ def test_recommend_logs_candidate_set_and_llm_picks(offline_client, monkeypatch)
 
     def fake_rerank(candidates, merged, group_size, top_k, **kw):
         picks = [
-            llm_rerank.LLMRerankResult(
-                name=candidates[0]["name"], reason="best fit", llm_rank=1
-            )
+            llm_rerank.LLMRerankResult(name=candidates[0]["name"], reason="best fit", llm_rank=1)
         ]
         return picks, _fake_meta()
 

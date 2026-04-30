@@ -233,21 +233,24 @@ def log_recommendation_request(
     """
     with _get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, (
-                user_ids,
-                merged_budget,
-                merged_max_distance_km,
-                group_size,
-                categories,
-                top_venue_names,
-                json.dumps(top_venues_payload or []),
-                json.dumps(request_context or {}),
-                model_version,
-                json.dumps(candidate_set or []),
-                json.dumps(llm_picks or []),
-                llm_latency_ms,
-                llm_cost_usd,
-            ))
+            cur.execute(
+                sql,
+                (
+                    user_ids,
+                    merged_budget,
+                    merged_max_distance_km,
+                    group_size,
+                    categories,
+                    top_venue_names,
+                    json.dumps(top_venues_payload or []),
+                    json.dumps(request_context or {}),
+                    model_version,
+                    json.dumps(candidate_set or []),
+                    json.dumps(llm_picks or []),
+                    llm_latency_ms,
+                    llm_cost_usd,
+                ),
+            )
             rec_id = cur.fetchone()[0]
         conn.commit()
     return int(rec_id)
@@ -289,14 +292,17 @@ def log_feedback(
     """
     with _get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, (
-                rec_id,
-                user_id,
-                venue_name,
-                signal,
-                accepted,
-                json.dumps(context or {}),
-            ))
+            cur.execute(
+                sql,
+                (
+                    rec_id,
+                    user_id,
+                    venue_name,
+                    signal,
+                    accepted,
+                    json.dumps(context or {}),
+                ),
+            )
             fid = cur.fetchone()[0]
         conn.commit()
     return int(fid)
@@ -354,10 +360,9 @@ def get_training_join() -> list[dict[str, Any]]:
         LEFT JOIN feedback f ON f.rec_id = r.id
         ORDER BY r.created_at DESC;
     """
-    with _get_conn() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(sql)
-            rows = cur.fetchall()
+    with _get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(sql)
+        rows = cur.fetchall()
     return [dict(r) for r in rows]
 
 

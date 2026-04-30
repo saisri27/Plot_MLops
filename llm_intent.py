@@ -94,8 +94,7 @@ def _compute_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     if rates is None:
         return 0.0
     return round(
-        (input_tokens / 1_000_000) * rates["input"]
-        + (output_tokens / 1_000_000) * rates["output"],
+        (input_tokens / 1_000_000) * rates["input"] + (output_tokens / 1_000_000) * rates["output"],
         6,
     )
 

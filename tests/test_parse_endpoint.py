@@ -49,9 +49,11 @@ def test_parse_returns_llm_result_when_available(monkeypatch):
 
 def test_parse_returns_defaults_when_openai_key_missing(monkeypatch):
     monkeypatch.setattr(llm_intent, "OPENAI_AVAILABLE", False)
+
     # parse_intent must not be called when OPENAI_AVAILABLE is False.
     def _boom(*_a, **_kw):
         raise AssertionError("parse_intent should not be called when OPENAI_AVAILABLE=False")
+
     monkeypatch.setattr(llm_intent, "parse_intent", _boom)
 
     client = TestClient(app)
@@ -71,6 +73,7 @@ def test_parse_falls_back_to_defaults_on_llm_error(monkeypatch):
 
     def _raise(*_a, **_kw):
         raise llm_intent.LLMIntentError("simulated failure")
+
     monkeypatch.setattr(llm_intent, "parse_intent", _raise)
 
     client = TestClient(app)

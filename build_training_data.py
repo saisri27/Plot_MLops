@@ -50,7 +50,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -65,6 +65,7 @@ BUDGET_RANK = {"low": 1, "medium": 2, "high": 3}
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _coerce_json(value: Any) -> Any:
     """psycopg2 may return JSONB as either dict/list or as a JSON string."""
@@ -97,7 +98,8 @@ def _signal_to_label(signal: str | None) -> float | None:
 # Core build
 # ---------------------------------------------------------------------------
 
-def build_rows() -> List[Dict[str, Any]]:
+
+def build_rows() -> list[dict[str, Any]]:
     """
     Pull rec_log ⟕ feedback rows and explode each recommendation's top-K venues
     into one row per (rec_id, venue_name) candidate, with engineered features.
@@ -107,70 +109,74 @@ def build_rows() -> List[Dict[str, Any]]:
     raw = get_training_join()
     logger.info("Pulled %d joined rows from Supabase.", len(raw))
 
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for r in raw:
-        rec_id            = r["rec_id"]
-        merged_budget     = r["merged_budget"] or "medium"
-        merged_max_dist   = float(r["merged_max_distance_km"] or 0.0)
-        group_size        = int(r["group_size"] or 0)
+        rec_id = r["rec_id"]
+        merged_budget = r["merged_budget"] or "medium"
+        merged_max_dist = float(r["merged_max_distance_km"] or 0.0)
+        group_size = int(r["group_size"] or 0)
         merged_categories = r["merged_categories"] or []
         # Prefer candidate_set (full v0 top-N including non-picked negatives).
         # Fall back to top_venues_payload for older rows logged before that
         # column existed — those only contain the final post-LLM top-K.
-        candidate_set     = _coerce_json(r.get("candidate_set")) or []
-        top_venues        = _coerce_json(r["top_venues_payload"]) or []
-        venues_payload    = candidate_set if candidate_set else top_venues
+        candidate_set = _coerce_json(r.get("candidate_set")) or []
+        top_venues = _coerce_json(r["top_venues_payload"]) or []
+        venues_payload = candidate_set if candidate_set else top_venues
         from_candidate_set = bool(candidate_set)
-        llm_picks         = _coerce_json(r.get("llm_picks")) or []
-        llm_pick_names    = {p.get("name") for p in llm_picks if isinstance(p, dict)}
-        feedback_venue    = r["feedback_venue_name"]
-        feedback_signal   = r["feedback_signal"]
-        feedback_user     = r["feedback_user_id"]
+        llm_picks = _coerce_json(r.get("llm_picks")) or []
+        llm_pick_names = {p.get("name") for p in llm_picks if isinstance(p, dict)}
+        feedback_venue = r["feedback_venue_name"]
+        feedback_signal = r["feedback_signal"]
+        feedback_user = r["feedback_user_id"]
 
         # If no venues were logged (older rows pre-migration), skip.
         if not venues_payload:
             continue
 
         for v in venues_payload:
-            name      = v.get("name")
-            category  = v.get("category", "")
-            price     = v.get("price_level", "medium")
-            rating    = float(v.get("rating") or 0.0)
-            dist_km   = float(v.get("distance_km") or 0.0)
+            name = v.get("name")
+            category = v.get("category", "")
+            price = v.get("price_level", "medium")
+            rating = float(v.get("rating") or 0.0)
+            dist_km = float(v.get("distance_km") or 0.0)
             score_at_rec = float(v.get("score") or 0.0)
 
             # Attach feedback only to the venue it was for; others get None.
             label = _signal_to_label(feedback_signal) if name == feedback_venue else None
 
-            out.append({
-                "rec_id":                rec_id,
-                "rec_created_at":        r["rec_created_at"].isoformat() if r["rec_created_at"] else None,
-                # group / request features
-                "group_size":            group_size,
-                "merged_budget":         merged_budget,
-                "merged_max_distance_km": merged_max_dist,
-                "n_categories":          len(merged_categories),
-                # venue features
-                "venue_name":            name,
-                "category":              category,
-                "price_level":           price,
-                "rating":                rating,
-                "distance_km":           dist_km,
-                # engineered cross features
-                "budget_gap":            _budget_gap(price, merged_budget),
-                "category_in_group":     int(category in merged_categories),
-                "distance_remaining_km": max(0.0, merged_max_dist - dist_km),
-                # what the rules-based model predicted at the time
-                "score_at_recommendation": score_at_rec,
-                "model_version":         r.get("model_version") or "rules_v1",
-                # which engine actually surfaced this row (for slicing during eval)
-                "from_candidate_set":    int(from_candidate_set),
-                "llm_picked":            int(name in llm_pick_names),
-                # labels
-                "feedback_user_id":      feedback_user,
-                "feedback_signal":       feedback_signal,
-                "label":                 label,   # 1 / 0 / None
-            })
+            out.append(
+                {
+                    "rec_id": rec_id,
+                    "rec_created_at": r["rec_created_at"].isoformat()
+                    if r["rec_created_at"]
+                    else None,
+                    # group / request features
+                    "group_size": group_size,
+                    "merged_budget": merged_budget,
+                    "merged_max_distance_km": merged_max_dist,
+                    "n_categories": len(merged_categories),
+                    # venue features
+                    "venue_name": name,
+                    "category": category,
+                    "price_level": price,
+                    "rating": rating,
+                    "distance_km": dist_km,
+                    # engineered cross features
+                    "budget_gap": _budget_gap(price, merged_budget),
+                    "category_in_group": int(category in merged_categories),
+                    "distance_remaining_km": max(0.0, merged_max_dist - dist_km),
+                    # what the rules-based model predicted at the time
+                    "score_at_recommendation": score_at_rec,
+                    "model_version": r.get("model_version") or "rules_v1",
+                    # which engine actually surfaced this row (for slicing during eval)
+                    "from_candidate_set": int(from_candidate_set),
+                    "llm_picked": int(name in llm_pick_names),
+                    # labels
+                    "feedback_user_id": feedback_user,
+                    "feedback_signal": feedback_signal,
+                    "label": label,  # 1 / 0 / None
+                }
+            )
 
     return out
 
@@ -179,20 +185,24 @@ def build_rows() -> List[Dict[str, Any]]:
 # Output
 # ---------------------------------------------------------------------------
 
-def write_csv(rows: List[Dict[str, Any]]) -> Path:
+
+def write_csv(rows: list[dict[str, Any]]) -> Path:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+    # noqa: UP017  — keep timezone.utc for Python 3.10 compat
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")  # noqa: UP017
     snapshot = OUT_DIR / f"plot_training_{ts}.csv"
-    latest   = OUT_DIR / "plot_training_latest.csv"
+    latest = OUT_DIR / "plot_training_latest.csv"
 
     try:
         import pandas as pd
+
         df = pd.DataFrame(rows)
         df.to_csv(snapshot, index=False)
-        df.to_csv(latest,   index=False)
+        df.to_csv(latest, index=False)
     except ImportError:
         # Tiny fallback so the script still works without pandas installed.
         import csv
+
         if not rows:
             snapshot.write_text("")
             latest.write_text("")
@@ -211,11 +221,12 @@ def write_csv(rows: List[Dict[str, Any]]) -> Path:
 # Quick summary so the user sees what they have
 # ---------------------------------------------------------------------------
 
-def summarize(rows: List[Dict[str, Any]]) -> None:
-    n_total      = len(rows)
-    n_labelled   = sum(1 for r in rows if r["label"] is not None)
-    n_yay        = sum(1 for r in rows if r["label"] == 1.0)
-    n_nahh       = sum(1 for r in rows if r["label"] == 0.0)
+
+def summarize(rows: list[dict[str, Any]]) -> None:
+    n_total = len(rows)
+    n_labelled = sum(1 for r in rows if r["label"] is not None)
+    n_yay = sum(1 for r in rows if r["label"] == 1.0)
+    n_nahh = sum(1 for r in rows if r["label"] == 0.0)
     n_unique_recs = len({r["rec_id"] for r in rows})
 
     print("\n=== Plot training set summary ===")

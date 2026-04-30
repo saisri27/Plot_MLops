@@ -95,7 +95,7 @@ class RecommendResponse(BaseModel):
     rec_id: int | None = Field(
         default=None,
         description="ID of the recommendation_log row this response was logged to. "
-                    "Pass back to /feedback so we can join feedback ↔ exact rec.",
+        "Pass back to /feedback so we can join feedback ↔ exact rec.",
     )
     merged_budget: str
     merged_max_distance_km: float
@@ -112,7 +112,9 @@ class RecommendResponse(BaseModel):
 
 
 class ParseIntentRequest(BaseModel):
-    free_text: str = Field(..., min_length=1, description="Natural-language vibe, e.g. 'chill cocktail night'")
+    free_text: str = Field(
+        ..., min_length=1, description="Natural-language vibe, e.g. 'chill cocktail night'"
+    )
 
 
 class ParseIntentResponse(BaseModel):
