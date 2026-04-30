@@ -1,0 +1,46 @@
+name: Scrape Ticketmaster events 3x/week
+
+# Runs Mon/Wed/Fri at 13:00 UTC (~6am SF). Also triggerable manually from
+# the Actions tab via "Run workflow".
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 13 * * 1,3,5"
+
+jobs:
+  scrape-events:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install scraper deps
+        working-directory: "Data_scraping "
+        run: pip install -r requirements.txt
+
+      # Auths against GCP using a service-account JSON stored as a repo secret.
+      # Create the secret at Settings → Secrets and variables → Actions:
+      #   GCP_SA_KEY:     contents of a service-account JSON with roles
+      #                   roles/bigquery.dataEditor + roles/bigquery.jobUser
+      #                   on mlops-project-491402
+      #   TICKETMASTER_API_KEY: your Ticketmaster Discovery API key
+      #   GCP_PROJECT:    mlops-project-491402
+      - name: Auth to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Run scraper
+        working-directory: "Data_scraping "
+        env:
+          TICKETMASTER_API_KEY: ${{ secrets.TICKETMASTER_API_KEY }}
+          GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
+          BQ_DATASET: places_raw
+          BQ_EVENTS_TABLE: events
+        run: python events_to_bq.py
