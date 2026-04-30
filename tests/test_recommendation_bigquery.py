@@ -43,10 +43,10 @@ _stub_bigquery()
 
 import recommendation_bigquery as rb  # noqa: E402
 
-
 # ---------------------------------------------------------------------------
 # normalize_google_price_level
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     "raw, expected",
@@ -69,6 +69,7 @@ def test_normalize_google_price_level(raw, expected):
 # ---------------------------------------------------------------------------
 # fetch_venues_from_bigquery — mocked client
 # ---------------------------------------------------------------------------
+
 
 class _Row(dict):
     """Mimics google.cloud.bigquery Row (.items() works on dict already)."""
@@ -101,9 +102,7 @@ def test_fetch_venues_normalizes_price_level_field():
             "editorial_summary": None,
         }
     ]
-    out = rb.fetch_venues_from_bigquery(
-        ["Food & Drink"], 5.0, client=_make_fake_client(fake_rows)
-    )
+    out = rb.fetch_venues_from_bigquery(["Food & Drink"], 5.0, client=_make_fake_client(fake_rows))
     assert len(out) == 1
     assert out[0]["price_level"] == "medium"
     assert out[0]["name"] == "Cafe A"

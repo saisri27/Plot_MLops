@@ -17,21 +17,27 @@ Group preference merging logic:
 from __future__ import annotations
 
 import logging
-import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
 
-load_dotenv()  # loads .env from project root automatically
+load_dotenv()  # loads .env from project root automatically; must run before modules
+# below that read env vars at import time (recommendation_bigquery, db).
 
-from recommendation_bigquery import fetch_venues_from_bigquery
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from pydantic import BaseModel, Field  # noqa: E402
 
-# Optional: Neon/Postgres feedback logging (gracefully skipped if DB not configured)
+from fastapi import FastAPI, HTTPException  # noqa: E402
+from recommendation_bigquery import fetch_venues_from_bigquery  # noqa: E402
+
+# Module-level import (NOT `from llm_rerank import ...`) so test monkeypatches
+# of llm_rerank.OPENAI_AVAILABLE / llm_rerank.rerank_venues actually propagate
+# to the names this module reads at call time.
+import llm_rerank  # noqa: E402
+
 try:
-    from db import log_feedback, log_recommendation_request, upsert_user
+    from db import log_feedback, log_recommendation_request, upsert_user  # noqa: E402
+
     DB_AVAILABLE = True
 except Exception:
     DB_AVAILABLE = False  # Set DATABASE_URL (Supabase) to enable
@@ -63,12 +69,12 @@ BUDGET_RANK = {"low": 1, "medium": 2, "high": 3}
 class UserPreference(BaseModel):
     user_id: str = Field(..., description="Unique user identifier")
     budget: str = Field(..., description="One of: low, medium, high")
-    categories: List[str] = Field(..., description="e.g. ['Food & Drink', 'Outdoors']")
+    categories: list[str] = Field(..., description="e.g. ['Food & Drink', 'Outdoors']")
     max_distance_km: float = Field(..., gt=0, description="Max travel distance in km")
 
 
 class RecommendRequest(BaseModel):
-    users: List[UserPreference] = Field(..., min_length=1, description="1–N users in the group")
+    users: list[UserPreference] = Field(..., min_length=1, description="1–N users in the group")
     top_k: int = Field(default=5, ge=1, le=20, description="How many results to return")
 
 
@@ -80,23 +86,28 @@ class VenueResult(BaseModel):
     price_level: str
     score: float
     reason: str
-    google_maps_uri: Optional[str] = None
-    editorial_summary: Optional[str] = None
+    google_maps_uri: str | None = None
+    editorial_summary: str | None = None
 
 
 class RecommendResponse(BaseModel):
-    rec_id: Optional[int] = Field(
+    rec_id: int | None = Field(
         default=None,
         description="ID of the recommendation_log row this response was logged to. "
                     "Pass back to /feedback so we can join feedback ↔ exact rec.",
     )
     merged_budget: str
     merged_max_distance_km: float
-    merged_categories: List[str]
+    merged_categories: list[str]
     group_size: int
     venues_scored: int
     model_version: str = "rules_v1"
-    recommendations: List[VenueResult]
+    recommendations: list[VenueResult]
+    # LLM rerank metadata. None when LLM was unavailable or failed → v0 fallback.
+    used_llm: bool = False
+    llm_model: str | None = None
+    prompt_version: str | None = None
+    llm_latency_ms: int | None = None
 
 
 class FeedbackRequest(BaseModel):
@@ -106,18 +117,19 @@ class FeedbackRequest(BaseModel):
         default="yay",
         description="One of: 'yay' (liked), 'nahh' (rejected), 'visited' (actually went)",
     )
-    rec_id: Optional[int] = Field(
+    rec_id: int | None = Field(
         default=None,
         description="ID returned from /recommend so feedback links back to the exact request.",
     )
-    request_context: Optional[Dict[str, Any]] = None
+    request_context: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
 # Group Preference Merging
 # ---------------------------------------------------------------------------
 
-def merge_preferences(users: List[UserPreference]) -> dict:
+
+def merge_preferences(users: list[UserPreference]) -> dict:
     """
     Merge N users' preferences into one set of query parameters.
 
@@ -137,7 +149,7 @@ def merge_preferences(users: List[UserPreference]) -> dict:
     merged_max_distance = min(u.max_distance_km for u in users)
 
     # Categories: union with weights (how many users want each category)
-    category_counts: Dict[str, int] = {}
+    category_counts: dict[str, int] = {}
     for user in users:
         for cat in user.categories:
             category_counts[cat] = category_counts.get(cat, 0) + 1
@@ -157,6 +169,7 @@ def merge_preferences(users: List[UserPreference]) -> dict:
 # ---------------------------------------------------------------------------
 # Scoring
 # ---------------------------------------------------------------------------
+
 
 def budget_match_score(venue_price: str, user_budget: str) -> float:
     """
@@ -182,10 +195,10 @@ def distance_score(distance_km: float, max_distance_km: float) -> float:
 
 
 def compute_score(
-    venue: Dict[str, Any],
+    venue: dict[str, Any],
     merged_budget: str,
     merged_max_distance: float,
-    category_weights: Dict[str, float],
+    category_weights: dict[str, float],
 ) -> tuple[float, str]:
     """
     Weighted scoring formula:
@@ -196,10 +209,10 @@ def compute_score(
 
     Returns (score: float, reason: str)
     """
-    rating_component    = (venue.get("rating") or 0.0) / 5.0
-    category_component  = category_weights.get(venue.get("category", ""), 0.0)
-    budget_component    = budget_match_score(venue.get("price_level", "medium"), merged_budget)
-    distance_component  = distance_score(venue.get("distance_km", 999), merged_max_distance)
+    rating_component = (venue.get("rating") or 0.0) / 5.0
+    category_component = category_weights.get(venue.get("category", ""), 0.0)
+    budget_component = budget_match_score(venue.get("price_level", "medium"), merged_budget)
+    distance_component = distance_score(venue.get("distance_km", 999), merged_max_distance)
 
     total = (
         0.40 * rating_component
@@ -231,8 +244,44 @@ def compute_score(
 
 
 # ---------------------------------------------------------------------------
+# LLM rerank merging
+# ---------------------------------------------------------------------------
+
+# How many v0 candidates are sent to the LLM. The LLM picks top_k of these.
+TOP_N_FOR_LLM = 20
+
+
+def _merge_llm_picks(
+    picks: list[llm_rerank.LLMRerankResult],
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """
+    Merge LLM picks (in LLM-rank order) with their matching v0 candidate dicts.
+
+    For each pick, look up the candidate by exact name match, overwrite the
+    'reason' field with the LLM's reason, and return the resulting list.
+
+    - Preserves all v0 fields (score, rating, distance_km, google_maps_uri,
+      editorial_summary, etc.) so VenueResult(**v) continues to work downstream.
+    - Preserves the v0 'score' field for analytics; LLM picks are ordered by
+      llm_rank, NOT by score.
+    - Names with no candidate match are skipped defensively (should not happen —
+      rerank_venues already filters hallucinations).
+    """
+    by_name = {c.get("name"): c for c in candidates}
+    merged: list[dict[str, Any]] = []
+    for pick in picks:
+        candidate = by_name.get(pick.name)
+        if candidate is None:
+            continue
+        merged.append({**candidate, "reason": pick.reason})
+    return merged
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
 
 @app.get("/")
 def root():
@@ -276,14 +325,17 @@ def recommend(request: RecommendRequest):
     """
     # 1. Merge group preferences
     merged = merge_preferences(request.users)
-    merged_budget       = merged["merged_budget"]
+    merged_budget = merged["merged_budget"]
     merged_max_distance = merged["merged_max_distance"]
-    category_weights    = merged["category_weights"]
-    all_categories      = merged["all_categories"]
+    category_weights = merged["category_weights"]
+    all_categories = merged["all_categories"]
 
     logger.info(
         "Recommend request | group_size=%d | budget=%s | max_dist=%.1f km | categories=%s",
-        len(request.users), merged_budget, merged_max_distance, all_categories,
+        len(request.users),
+        merged_budget,
+        merged_max_distance,
+        all_categories,
     )
 
     # 2. Fetch venues from BigQuery
@@ -294,7 +346,7 @@ def recommend(request: RecommendRequest):
         )
     except Exception as exc:
         logger.exception("BigQuery fetch failed: %s", exc)
-        raise HTTPException(status_code=503, detail=f"BigQuery error: {exc}")
+        raise HTTPException(status_code=503, detail=f"BigQuery error: {exc}") from exc
 
     if not venues:
         return RecommendResponse(
@@ -308,19 +360,46 @@ def recommend(request: RecommendRequest):
         )
 
     # 3. Score every venue
-    scored: List[Dict[str, Any]] = []
+    scored: list[dict[str, Any]] = []
     for venue in venues:
-        score, reason = compute_score(
-            venue, merged_budget, merged_max_distance, category_weights
-        )
+        score, reason = compute_score(venue, merged_budget, merged_max_distance, category_weights)
         scored.append({**venue, "score": score, "reason": reason})
 
-    # 4. Rank and return top_k
+    # 4. Rank and prepare LLM candidate set (top-N v0 picks)
     ranked = sorted(scored, key=lambda v: v["score"], reverse=True)
-    top = ranked[: request.top_k]
+    candidates = ranked[:TOP_N_FOR_LLM]
 
-    # 5. Log request to DB for analytics / retraining and capture rec_id
-    rec_id: Optional[int] = None
+    # 5. LLM rerank with v0 fallback
+    used_llm = False
+    llm_model: str | None = None
+    prompt_version: str | None = None
+    llm_latency_ms: int | None = None
+    final = candidates[: request.top_k]
+
+    if llm_rerank.OPENAI_AVAILABLE:
+        try:
+            llm_picks, llm_meta = llm_rerank.rerank_venues(
+                candidates, merged, len(request.users), request.top_k
+            )
+            if llm_picks:
+                final = _merge_llm_picks(llm_picks, candidates)
+                used_llm = True
+                llm_model = llm_meta.model
+                prompt_version = llm_meta.prompt_version
+                llm_latency_ms = llm_meta.latency_ms
+            else:
+                # Lenient mode: every pick was hallucinated. Fall through to v0.
+                logger.warning("LLM returned 0 valid picks; falling back to v0.")
+        except llm_rerank.LLMRerankError as exc:
+            logger.warning("LLM rerank failed, falling back to v0: %s", exc)
+    # else: missing OPENAI_API_KEY logged once at module import; quietly use v0.
+
+    # The model_version stamped on the recommendation_log row reflects what
+    # actually ranked the final list — not just what scored the candidates.
+    effective_model_version = f"{llm_model}+{prompt_version}" if used_llm else "rules_v1"
+
+    # 6. Log request to DB for analytics / retraining and capture rec_id
+    rec_id: int | None = None
     if DB_AVAILABLE:
         # Best-effort: make sure each user_id exists in `users` so future joins
         # / dashboards have something to reference. Failures are non-fatal.
@@ -339,12 +418,12 @@ def recommend(request: RecommendRequest):
                 user_ids=[u.user_id for u in request.users],
                 merged_budget=merged_budget,
                 categories=all_categories,
-                top_venue_names=[v["name"] for v in top],
+                top_venue_names=[v["name"] for v in final],
                 merged_max_distance_km=merged_max_distance,
                 group_size=len(request.users),
-                top_venues_payload=top,                              # full feature snapshot
+                top_venues_payload=final,                            # full feature snapshot
                 request_context={"users": [u.model_dump() for u in request.users]},
-                model_version="rules_v1",
+                model_version=effective_model_version,
             )
         except Exception as exc:
             logger.warning("DB log failed (non-fatal): %s", exc)
@@ -356,8 +435,12 @@ def recommend(request: RecommendRequest):
         merged_categories=all_categories,
         group_size=len(request.users),
         venues_scored=len(scored),
-        model_version="rules_v1",
-        recommendations=[VenueResult(**v) for v in top],
+        model_version=effective_model_version,
+        recommendations=[VenueResult(**v) for v in final],
+        used_llm=used_llm,
+        llm_model=llm_model,
+        prompt_version=prompt_version,
+        llm_latency_ms=llm_latency_ms,
     )
 
 
@@ -398,4 +481,4 @@ def feedback(request: FeedbackRequest):
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.exception("Failed to log feedback: %s", exc)
-        raise HTTPException(status_code=500, detail=f"DB write failed: {exc}")
+        raise HTTPException(status_code=500, detail=f"DB write failed: {exc}") from exc

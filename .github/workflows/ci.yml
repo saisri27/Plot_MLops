@@ -7,10 +7,31 @@ name: CI
 on:
   push:
     branches: [main, sai]
+  # Run CI on every PR regardless of base branch so stacked PRs (e.g. PR 2
+  # targeting PR 1's branch) still get test coverage before merge.
   pull_request:
-    branches: [main, sai]
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ruff
+        run: pip install ruff==0.15.11
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Ruff format check
+        run: ruff format --check .
+
   test:
     runs-on: ubuntu-latest
     steps:
@@ -33,4 +54,5 @@ jobs:
         env:
           # Keep BigQuery integration tests skipped in CI (no ADC by default).
           RUN_BQ_INTEGRATION: "0"
-        run: pytest tests/ -v
+        # `-m "not live"` skips tests marked @pytest.mark.live (real OpenAI calls).
+        run: pytest tests/ -v -m "not live"

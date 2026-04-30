@@ -28,12 +28,11 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import psycopg2
-from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
+from psycopg2.extras import RealDictCursor
 
 load_dotenv()  # loads .env from project root automatically
 
@@ -138,12 +137,13 @@ def create_tables() -> None:
 # User operations
 # ---------------------------------------------------------------------------
 
+
 def upsert_user(
     user_id: str,
-    name: Optional[str] = None,
-    email: Optional[str] = None,
+    name: str | None = None,
+    email: str | None = None,
     default_budget: str = "medium",
-    default_categories: Optional[List[str]] = None,
+    default_categories: list[str] | None = None,
     default_max_distance_km: float = 5.0,
 ) -> None:
     """Insert or update a user's profile and preferences."""
@@ -160,24 +160,26 @@ def upsert_user(
     """
     with _get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, (
-                user_id,
-                name,
-                email,
-                default_budget,
-                default_categories or [],
-                default_max_distance_km,
-            ))
+            cur.execute(
+                sql,
+                (
+                    user_id,
+                    name,
+                    email,
+                    default_budget,
+                    default_categories or [],
+                    default_max_distance_km,
+                ),
+            )
         conn.commit()
 
 
-def get_user(user_id: str) -> Optional[Dict[str, Any]]:
+def get_user(user_id: str) -> dict[str, Any] | None:
     """Fetch a user's preferences by user_id. Returns None if not found."""
     sql = "SELECT * FROM users WHERE user_id = %s LIMIT 1;"
-    with _get_conn() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(sql, (user_id,))
-            row = cur.fetchone()
+    with _get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(sql, (user_id,))
+        row = cur.fetchone()
     return dict(row) if row else None
 
 
@@ -185,15 +187,16 @@ def get_user(user_id: str) -> Optional[Dict[str, Any]]:
 # Recommendation logging
 # ---------------------------------------------------------------------------
 
+
 def log_recommendation_request(
-    user_ids: List[str],
+    user_ids: list[str],
     merged_budget: str,
-    categories: List[str],
-    top_venue_names: List[str],
-    merged_max_distance_km: Optional[float] = None,
-    group_size: Optional[int] = None,
-    top_venues_payload: Optional[List[Dict[str, Any]]] = None,
-    request_context: Optional[Dict[str, Any]] = None,
+    categories: list[str],
+    top_venue_names: list[str],
+    merged_max_distance_km: float | None = None,
+    group_size: int | None = None,
+    top_venues_payload: list[dict[str, Any]] | None = None,
+    request_context: dict[str, Any] | None = None,
     model_version: str = "rules_v1",
 ) -> int:
     """
@@ -230,12 +233,13 @@ def log_recommendation_request(
 # Feedback logging (the ML training signal)
 # ---------------------------------------------------------------------------
 
+
 def log_feedback(
     user_id: str,
     venue_name: str,
     signal: str = "yay",
-    rec_id: Optional[int] = None,
-    context: Optional[Dict[str, Any]] = None,
+    rec_id: int | None = None,
+    context: dict[str, Any] | None = None,
 ) -> int:
     """
     Record whether a user said yay/nahh/visited on a recommended venue.
@@ -274,7 +278,7 @@ def log_feedback(
     return int(fid)
 
 
-def get_feedback_for_training() -> List[Dict[str, Any]]:
+def get_feedback_for_training() -> list[dict[str, Any]]:
     """
     Fetch all feedback rows for use in ML training.
     Returns list of dicts: {rec_id, user_id, venue_name, signal, accepted, context, created_at}
@@ -284,14 +288,13 @@ def get_feedback_for_training() -> List[Dict[str, Any]]:
         FROM feedback
         ORDER BY created_at DESC;
     """
-    with _get_conn() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(sql)
-            rows = cur.fetchall()
+    with _get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(sql)
+        rows = cur.fetchall()
     return [dict(r) for r in rows]
 
 
-def get_training_join() -> List[Dict[str, Any]]:
+def get_training_join() -> list[dict[str, Any]]:
     """
     Build the canonical (request_features, venue_features) -> label training rows
     by joining recommendation_log with feedback on rec_id.

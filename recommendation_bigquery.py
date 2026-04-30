@@ -16,7 +16,7 @@ Local / Cloud Run:
 from __future__ import annotations
 
 import os
-from typing import Any, List
+from typing import Any
 
 from google.cloud import bigquery
 
@@ -59,7 +59,7 @@ def normalize_google_price_level(price_level: str | None) -> str:
 
 
 def fetch_venues_from_bigquery(
-    categories: List[str],
+    categories: list[str],
     max_distance_km: float,
     *,
     client: bigquery.Client | None = None,
@@ -104,16 +104,14 @@ def fetch_venues_from_bigquery(
     for row in rows:
         d = dict(row.items())
         raw_pl = d.get("price_level")
-        d["price_level"] = normalize_google_price_level(
-            raw_pl if isinstance(raw_pl, str) else None
-        )
+        d["price_level"] = normalize_google_price_level(raw_pl if isinstance(raw_pl, str) else None)
         out.append(d)
     return out
 
 
 def fetch_events_from_bigquery(
     max_distance_miles: float,
-    genres: List[str] | None = None,
+    genres: list[str] | None = None,
     *,
     client: bigquery.Client | None = None,
 ) -> list[dict[str, Any]]:
