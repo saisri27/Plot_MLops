@@ -34,6 +34,7 @@ from recommendation_bigquery import fetch_venues_from_bigquery  # noqa: E402
 # of llm_rerank.OPENAI_AVAILABLE / llm_rerank.rerank_venues actually propagate
 # to the names this module reads at call time.
 import llm_rerank  # noqa: E402
+import llm_intent  # noqa: E402
 
 try:
     from db import log_feedback, log_recommendation_request, upsert_user  # noqa: E402
@@ -108,6 +109,21 @@ class RecommendResponse(BaseModel):
     llm_model: str | None = None
     prompt_version: str | None = None
     llm_latency_ms: int | None = None
+
+
+class ParseIntentRequest(BaseModel):
+    free_text: str = Field(..., min_length=1, description="Natural-language vibe, e.g. 'chill cocktail night'")
+
+
+class ParseIntentResponse(BaseModel):
+    budget: str
+    max_distance_km: float
+    categories: list[str]
+    used_llm: bool = False
+    llm_model: str | None = None
+    prompt_version: str | None = None
+    llm_latency_ms: int | None = None
+    llm_cost_usd: float | None = None
 
 
 class FeedbackRequest(BaseModel):
@@ -374,6 +390,8 @@ def recommend(request: RecommendRequest):
     llm_model: str | None = None
     prompt_version: str | None = None
     llm_latency_ms: int | None = None
+    llm_cost_usd: float | None = None
+    llm_picks_payload: list[dict[str, Any]] = []
     final = candidates[: request.top_k]
 
     if llm_rerank.OPENAI_AVAILABLE:
@@ -387,6 +405,8 @@ def recommend(request: RecommendRequest):
                 llm_model = llm_meta.model
                 prompt_version = llm_meta.prompt_version
                 llm_latency_ms = llm_meta.latency_ms
+                llm_cost_usd = llm_meta.cost_usd
+                llm_picks_payload = [p.model_dump() for p in llm_picks]
             else:
                 # Lenient mode: every pick was hallucinated. Fall through to v0.
                 logger.warning("LLM returned 0 valid picks; falling back to v0.")
@@ -421,9 +441,13 @@ def recommend(request: RecommendRequest):
                 top_venue_names=[v["name"] for v in final],
                 merged_max_distance_km=merged_max_distance,
                 group_size=len(request.users),
-                top_venues_payload=final,                            # full feature snapshot
+                top_venues_payload=final,
                 request_context={"users": [u.model_dump() for u in request.users]},
                 model_version=effective_model_version,
+                candidate_set=candidates,
+                llm_picks=llm_picks_payload,
+                llm_latency_ms=llm_latency_ms,
+                llm_cost_usd=llm_cost_usd,
             )
         except Exception as exc:
             logger.warning("DB log failed (non-fatal): %s", exc)
@@ -478,7 +502,53 @@ def feedback(request: FeedbackRequest):
             "signal": request.signal,
         }
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Failed to log feedback: %s", exc)
         raise HTTPException(status_code=500, detail=f"DB write failed: {exc}") from exc
+
+
+@app.post("/parse", response_model=ParseIntentResponse)
+def parse(request: ParseIntentRequest):
+    """
+    Free-text → structured prefs that /recommend already accepts.
+
+    Example:
+      { "free_text": "chill cocktail night, no clubs" }
+      → {"budget":"medium","max_distance_km":5.0,"categories":["Food & Drink","Nightlife"], ...}
+
+    Falls back to safe defaults if OPENAI_API_KEY is unset or the call fails,
+    so the demo never blocks. The frontend uses the result to pre-fill the
+    per-user chips/sliders; the user can still tweak before hitting /recommend.
+    """
+    if not llm_intent.OPENAI_AVAILABLE:
+        d = llm_intent.DEFAULT_INTENT
+        return ParseIntentResponse(
+            budget=d["budget"],
+            max_distance_km=d["max_distance_km"],
+            categories=list(d["categories"]),
+            used_llm=False,
+        )
+
+    try:
+        intent, meta = llm_intent.parse_intent(request.free_text)
+    except llm_intent.LLMIntentError as exc:
+        logger.warning("Intent parse failed, returning defaults: %s", exc)
+        d = llm_intent.DEFAULT_INTENT
+        return ParseIntentResponse(
+            budget=d["budget"],
+            max_distance_km=d["max_distance_km"],
+            categories=list(d["categories"]),
+            used_llm=False,
+        )
+
+    return ParseIntentResponse(
+        budget=intent.budget,
+        max_distance_km=intent.max_distance_km,
+        categories=intent.categories,
+        used_llm=True,
+        llm_model=meta.model,
+        prompt_version=meta.prompt_version,
+        llm_latency_ms=meta.latency_ms,
+        llm_cost_usd=meta.cost_usd,
+    )

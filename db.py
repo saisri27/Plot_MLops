@@ -95,6 +95,15 @@ ALTER TABLE recommendation_log ADD COLUMN IF NOT EXISTS group_size INTEGER;
 ALTER TABLE recommendation_log ADD COLUMN IF NOT EXISTS top_venues_payload JSONB DEFAULT '[]';
 ALTER TABLE recommendation_log ADD COLUMN IF NOT EXISTS request_context JSONB DEFAULT '{}';
 ALTER TABLE recommendation_log ADD COLUMN IF NOT EXISTS model_version TEXT DEFAULT 'rules_v1';
+-- The full v0-scored candidate set sent to the LLM (~20 venues). Lets the
+-- ranker train on shown-but-not-picked negatives instead of just the one
+-- venue that got Yay/Nahh. Also lets eval pipelines replay prompts later.
+ALTER TABLE recommendation_log ADD COLUMN IF NOT EXISTS candidate_set JSONB DEFAULT '[]';
+-- The LLM's picks with reasons, separate from top_venues_payload so we can
+-- compare LLM ordering against feedback even if model_version doesn't say "llm".
+ALTER TABLE recommendation_log ADD COLUMN IF NOT EXISTS llm_picks JSONB DEFAULT '[]';
+ALTER TABLE recommendation_log ADD COLUMN IF NOT EXISTS llm_latency_ms INTEGER;
+ALTER TABLE recommendation_log ADD COLUMN IF NOT EXISTS llm_cost_usd FLOAT;
 
 -- Log user feedback on individual venues (the ML training signal)
 CREATE TABLE IF NOT EXISTS feedback (
@@ -198,17 +207,28 @@ def log_recommendation_request(
     top_venues_payload: list[dict[str, Any]] | None = None,
     request_context: dict[str, Any] | None = None,
     model_version: str = "rules_v1",
+    candidate_set: list[dict[str, Any]] | None = None,
+    llm_picks: list[dict[str, Any]] | None = None,
+    llm_latency_ms: int | None = None,
+    llm_cost_usd: float | None = None,
 ) -> int:
     """
     Log every /recommend call. Used for analytics and future feature engineering.
     Returns the new rec_id (recommendation_log.id) so the caller can echo it back
     to the client and link feedback rows to this exact recommendation.
+
+    candidate_set:  the full v0-scored candidates fed to the LLM (~20 venues).
+                    The ranker trains on these so it sees shown-but-not-picked
+                    negatives, not just the one venue that got Yay/Nahh.
+    llm_picks:      the LLM's picks with reasons. Lets eval pipelines compare
+                    LLM order to feedback even when fallback to v0 happens.
     """
     sql = """
         INSERT INTO recommendation_log
             (user_ids, merged_budget, merged_max_distance_km, group_size,
-             categories, top_venues, top_venues_payload, request_context, model_version)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+             categories, top_venues, top_venues_payload, request_context,
+             model_version, candidate_set, llm_picks, llm_latency_ms, llm_cost_usd)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id;
     """
     with _get_conn() as conn:
@@ -223,6 +243,10 @@ def log_recommendation_request(
                 json.dumps(top_venues_payload or []),
                 json.dumps(request_context or {}),
                 model_version,
+                json.dumps(candidate_set or []),
+                json.dumps(llm_picks or []),
+                llm_latency_ms,
+                llm_cost_usd,
             ))
             rec_id = cur.fetchone()[0]
         conn.commit()
@@ -313,6 +337,10 @@ def get_training_join() -> list[dict[str, Any]]:
             r.merged_max_distance_km,
             r.categories        AS merged_categories,
             r.top_venues_payload,
+            r.candidate_set,
+            r.llm_picks,
+            r.llm_latency_ms,
+            r.llm_cost_usd,
             r.request_context,
             r.model_version,
             f.id                AS feedback_id,

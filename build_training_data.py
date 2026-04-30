@@ -114,7 +114,15 @@ def build_rows() -> List[Dict[str, Any]]:
         merged_max_dist   = float(r["merged_max_distance_km"] or 0.0)
         group_size        = int(r["group_size"] or 0)
         merged_categories = r["merged_categories"] or []
-        venues_payload    = _coerce_json(r["top_venues_payload"]) or []
+        # Prefer candidate_set (full v0 top-N including non-picked negatives).
+        # Fall back to top_venues_payload for older rows logged before that
+        # column existed — those only contain the final post-LLM top-K.
+        candidate_set     = _coerce_json(r.get("candidate_set")) or []
+        top_venues        = _coerce_json(r["top_venues_payload"]) or []
+        venues_payload    = candidate_set if candidate_set else top_venues
+        from_candidate_set = bool(candidate_set)
+        llm_picks         = _coerce_json(r.get("llm_picks")) or []
+        llm_pick_names    = {p.get("name") for p in llm_picks if isinstance(p, dict)}
         feedback_venue    = r["feedback_venue_name"]
         feedback_signal   = r["feedback_signal"]
         feedback_user     = r["feedback_user_id"]
@@ -155,6 +163,9 @@ def build_rows() -> List[Dict[str, Any]]:
                 # what the rules-based model predicted at the time
                 "score_at_recommendation": score_at_rec,
                 "model_version":         r.get("model_version") or "rules_v1",
+                # which engine actually surfaced this row (for slicing during eval)
+                "from_candidate_set":    int(from_candidate_set),
+                "llm_picked":            int(name in llm_pick_names),
                 # labels
                 "feedback_user_id":      feedback_user,
                 "feedback_signal":       feedback_signal,

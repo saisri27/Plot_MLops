@@ -262,6 +262,13 @@ function renderUsers() {
         <button class="remove-btn" title="Remove this friend"
                 data-idx="${i}" ${onlyOne ? "disabled" : ""}>×</button>
       </div>
+      <label>Describe the vibe (optional, LLM fills in below)</label>
+      <div style="display:flex; gap:6px; margin-bottom:6px;">
+        <input class="vibe-input" type="text" placeholder="e.g. chill cocktail night, no clubs"
+               data-idx="${i}" style="flex:1;" />
+        <button class="vibe-btn" data-idx="${i}" type="button">Parse</button>
+      </div>
+      <div class="vibe-status meta" id="vibe-status-${i}"></div>
       <label>Budget</label>
       <select data-idx="${i}" data-field="budget">
         <option value="low" ${u.budget==='low'?'selected':''}>low</option>
@@ -335,6 +342,51 @@ function renderUsers() {
       }
     });
   });
+  root.querySelectorAll(".vibe-btn").forEach(btn => {
+    btn.addEventListener("click", e => parseVibe(+e.currentTarget.dataset.idx));
+  });
+}
+
+// Derive /parse URL from the /recommend URL the user entered.
+function parseUrlFromApi() {
+  const apiUrl = document.getElementById("apiUrl").value.trim();
+  return apiUrl.replace(/\/recommend\/?$/, "/parse");
+}
+
+async function parseVibe(idx) {
+  const input = document.querySelector(`.vibe-input[data-idx="${idx}"]`);
+  const statusEl = document.getElementById(`vibe-status-${idx}`);
+  const text = (input?.value || "").trim();
+  if (!text) {
+    statusEl.textContent = "Type a vibe first.";
+    return;
+  }
+  statusEl.textContent = "Parsing...";
+  try {
+    const resp = await fetch(parseUrlFromApi(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ free_text: text }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || resp.statusText);
+
+    USERS[idx].budget   = data.budget;
+    USERS[idx].distance = Math.round(data.max_distance_km);
+    USERS[idx].cats     = new Set(data.categories || []);
+    renderUsers();
+    // Restore the typed text so the user can iterate.
+    const restored = document.querySelector(`.vibe-input[data-idx="${idx}"]`);
+    if (restored) restored.value = text;
+    const restoredStatus = document.getElementById(`vibe-status-${idx}`);
+    if (restoredStatus) {
+      restoredStatus.textContent = data.used_llm
+        ? `Parsed by ${data.llm_model} (${data.llm_latency_ms}ms)`
+        : "Used defaults (no OPENAI_API_KEY).";
+    }
+  } catch (err) {
+    statusEl.textContent = `Parse failed: ${err.message}`;
+  }
 }
 
 // Holds the latest recommendation context so feedback POSTs can include rec_id
