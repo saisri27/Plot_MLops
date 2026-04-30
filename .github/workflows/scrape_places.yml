@@ -1,12 +1,11 @@
-name: Scrape Google Places weekly
+name: Scrape Google Places (manual fallback)
 
-# Runs Sunday at 13:00 UTC (~6am SF). Places change less than events, and the
-# Places API costs ~$13 per full grid scan, so weekly is the right cadence.
-# Also triggerable manually from the Actions tab via "Run workflow".
+# Production schedule lives on Cloud Run jobs + Cloud Scheduler in GCP, not
+# here — see scripts/setup_cloud_run_jobs.sh. This workflow stays as a manual
+# emergency fallback. Each manual run still costs ~$13 in Places API calls,
+# so only trigger when GCP scheduling is broken.
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 13 * * 0"
 
 jobs:
   scrape-places:

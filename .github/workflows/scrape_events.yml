@@ -1,11 +1,11 @@
-name: Scrape Ticketmaster events 3x/week
+name: Scrape Ticketmaster events (manual fallback)
 
-# Runs Mon/Wed/Fri at 13:00 UTC (~6am SF). Also triggerable manually from
-# the Actions tab via "Run workflow".
+# Production schedule lives on Cloud Run jobs + Cloud Scheduler in GCP, not
+# here — see scripts/setup_cloud_run_jobs.sh. This workflow stays as a manual
+# emergency fallback in case GCP scheduling is misconfigured / paused.
+# Trigger from the Actions tab via "Run workflow" if needed.
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 13 * * 1,3,5"
 
 jobs:
   scrape-events:
