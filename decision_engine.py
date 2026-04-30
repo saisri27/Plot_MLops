@@ -28,7 +28,10 @@ from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
 from fastapi import FastAPI, HTTPException  # noqa: E402
-from recommendation_bigquery import fetch_venues_from_bigquery  # noqa: E402
+from recommendation_bigquery import (  # noqa: E402
+    fetch_events_from_bigquery,
+    fetch_venues_from_bigquery,
+)
 
 # Module-level import (NOT `from llm_rerank import ...`) so test monkeypatches
 # of llm_rerank.OPENAI_AVAILABLE / llm_rerank.rerank_venues actually propagate
@@ -126,6 +129,43 @@ class ParseIntentResponse(BaseModel):
     prompt_version: str | None = None
     llm_latency_ms: int | None = None
     llm_cost_usd: float | None = None
+
+
+class EventsRequest(BaseModel):
+    categories: list[str] = Field(
+        ..., min_length=1, description="Canonical category chips selected by the user"
+    )
+    max_distance_km: float = Field(default=10.0, gt=0, le=50.0)
+    days_ahead: int = Field(
+        default=60, ge=1, le=365, description="Only events starting within N days"
+    )
+    max_price: float | None = Field(
+        default=None, ge=0, description="Drop events with price_min above this; None = no cap"
+    )
+    top_k: int = Field(default=10, ge=1, le=50)
+
+
+class EventResult(BaseModel):
+    name: str
+    category: str
+    segment: str | None = None
+    genre: str | None = None
+    distance_km: float
+    start_datetime_utc: str
+    venue_name: str | None = None
+    event_url: str | None = None
+    image_url: str | None = None
+    price_min: float | None = None
+    price_max: float | None = None
+    price_currency: str | None = None
+
+
+class EventsResponse(BaseModel):
+    requested_categories: list[str]
+    max_distance_km: float
+    days_ahead: int
+    events_found: int
+    events: list[EventResult]
 
 
 class FeedbackRequest(BaseModel):
@@ -508,6 +548,69 @@ def feedback(request: FeedbackRequest):
     except Exception as exc:
         logger.exception("Failed to log feedback: %s", exc)
         raise HTTPException(status_code=500, detail=f"DB write failed: {exc}") from exc
+
+
+@app.post("/events", response_model=EventsResponse)
+def events(request: EventsRequest):
+    """
+    Upcoming Ticketmaster events near SF, filtered by category + distance + date.
+
+    Past events are filtered at the SQL boundary so callers never see stale rows.
+    Distance is normalized to km in the output (the events table stores miles).
+
+    Example:
+      {
+        "categories": ["Entertainment", "Arts & Culture"],
+        "max_distance_km": 15,
+        "days_ahead": 30,
+        "max_price": 100,
+        "top_k": 10
+      }
+    """
+    try:
+        rows = fetch_events_from_bigquery(
+            categories=request.categories,
+            max_distance_km=request.max_distance_km,
+            days_ahead=request.days_ahead,
+        )
+    except Exception as exc:
+        logger.exception("BigQuery event fetch failed: %s", exc)
+        raise HTTPException(status_code=503, detail=f"BigQuery error: {exc}") from exc
+
+    if request.max_price is not None:
+        rows = [
+            r
+            for r in rows
+            if r.get("price_min") is None or float(r["price_min"]) <= request.max_price
+        ]
+
+    rows = rows[: request.top_k]
+
+    return EventsResponse(
+        requested_categories=request.categories,
+        max_distance_km=request.max_distance_km,
+        days_ahead=request.days_ahead,
+        events_found=len(rows),
+        events=[
+            EventResult(
+                name=r.get("name") or "Unknown event",
+                category=r.get("category") or "Entertainment",
+                segment=r.get("segment"),
+                genre=r.get("genre"),
+                distance_km=round(float(r.get("distance_km") or 0.0), 2),
+                start_datetime_utc=r["start_datetime_utc"].isoformat()
+                if hasattr(r.get("start_datetime_utc"), "isoformat")
+                else str(r.get("start_datetime_utc") or ""),
+                venue_name=r.get("venue_name"),
+                event_url=r.get("event_url"),
+                image_url=r.get("image_url"),
+                price_min=r.get("price_min"),
+                price_max=r.get("price_max"),
+                price_currency=r.get("price_currency"),
+            )
+            for r in rows
+        ],
+    )
 
 
 @app.post("/parse", response_model=ParseIntentResponse)
