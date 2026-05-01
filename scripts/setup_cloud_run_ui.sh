@@ -9,6 +9,10 @@
 
 set -euo pipefail
 
+# cd to repo root so `gcloud builds submit ... UI` resolves regardless of
+# where the script was invoked from.
+cd "$(dirname "$0")/.."
+
 PROJECT="${GCP_PROJECT:-mlops-project-491402}"
 REGION="${REGION:-us-central1}"
 REPO="plot"
