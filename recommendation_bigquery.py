@@ -20,6 +20,8 @@ from typing import Any
 
 from google.cloud import bigquery
 
+from categories import ALLOWED_SET as _ALLOWED_CATEGORY_SET
+
 # Align with Data_scraping pipelines and INFRASTRUCTURE.md
 GCP_PROJECT = os.environ.get("GCP_PROJECT", "mlops-project-491402").strip()
 BQ_DATASET = os.environ.get("BQ_DATASET", "places_raw").strip()
@@ -55,6 +57,17 @@ SEGMENT_TO_CATEGORY: dict[str, str] = {
 }
 EVENT_FALLBACK_CATEGORY = "Entertainment"
 KM_PER_MILE = 1.609344
+
+# Invariant: every category we'd ever route an event to MUST be one of the
+# canonical 11. If someone adds a new mapping target without first adding the
+# category to categories.ALLOWED_CATEGORIES, the import fails loudly here
+# instead of producing silently-unselectable events at runtime.
+_ROUTE_TARGETS = set(SEGMENT_TO_CATEGORY.values()) | {EVENT_FALLBACK_CATEGORY}
+assert _ROUTE_TARGETS <= _ALLOWED_CATEGORY_SET, (
+    "Segment mapping points at categories that are not in "
+    "categories.ALLOWED_CATEGORIES: "
+    f"{_ROUTE_TARGETS - _ALLOWED_CATEGORY_SET}"
+)
 
 
 def map_segment_to_category(segment: str | None) -> str:
