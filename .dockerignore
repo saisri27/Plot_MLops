@@ -1,0 +1,36 @@
+# Don't bake secrets, dev clutter, scraper code, training data, or
+# notebooks into the API image. Only the files explicitly COPYed in
+# the Dockerfile end up in the container.
+.env
+.env.*
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.git/
+.gitignore
+.github/
+.claude/
+node_modules/
+package-lock.json
+package.json
+
+# Not needed at runtime
+Data_scraping /
+notebooks/
+training_data/
+mlruns/
+models/
+demo/
+UI/
+tests/
+FastAPI/
+docs/
+*.md
+*.html
+*.zip
+*.json
+plot-scraper-key.json
+build_training_data.py
+today_progress.html
