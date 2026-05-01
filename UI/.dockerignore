@@ -1,0 +1,8 @@
+# Don't bake secrets / dev clutter / large zips into the image.
+.env
+.env.*
+*.zip
+plot.zip
+plot-2.zip
+.DS_Store
+node_modules/
