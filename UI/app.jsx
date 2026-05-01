@@ -39,9 +39,11 @@ function PlotApp() {
     last_prefs: null,
   });
 
-  // We pull a bigger pool from the LLM than we show so the user can
+  // We pull a small pool from the LLM than we show so the user can
   // "Shuffle" through different picks without a fresh /recommend round-trip.
-  const RECS_POOL_SIZE = 10;
+  // Pool=8 keeps the first call fast (~6–8 s) while still supporting one
+  // shuffle round (cards 6-8 plus 2 from a fresh refetch).
+  const RECS_POOL_SIZE = 8;
   const RECS_VISIBLE = 5;
 
   // Submit handler — called by SetPrefsScreen with the user's chosen prefs.

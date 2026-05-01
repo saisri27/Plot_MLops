@@ -783,6 +783,7 @@ function adaptEvent(e) {
     reason: e.venue_name || '',
     date: dateStr,
     link: e.event_url || null,                            // tap-through target
+    image: e.image_url || null,                           // real Ticketmaster photo
   };
 }
 
@@ -834,30 +835,7 @@ function RecsScreen({ vibe, density, onBack, onLockedIn, votes, setVotes, recSta
         <SectionLabel vibe={vibe}>
           {recState?.used_llm ? 'LLM ranked' : 'rules ranked'} · {recState?.llm_latency_ms ? `${recState.llm_latency_ms}ms` : ''}
         </SectionLabel>
-        {/* Shuffle: slide the visible 5-card window through the cached pool.
-            Disabled while loading or when the pool only has the 5 we showed. */}
-        <button
-          onClick={onShuffle}
-          disabled={!canShuffle || recState?.loading}
-          aria-label="Shuffle picks"
-          style={{
-            background: 'transparent',
-            border: `1.5px solid ${pal.line}`,
-            borderRadius: T2.radii.pill,
-            padding: '6px 12px',
-            color: canShuffle ? pal.ink : pal.inkMute,
-            fontFamily: 'Inter, sans-serif',
-            fontSize: 12,
-            fontWeight: 600,
-            cursor: canShuffle ? 'pointer' : 'default',
-            opacity: canShuffle ? 1 : 0.4,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 4,
-            whiteSpace: 'nowrap',
-          }}>
-          ↻ Shuffle
-        </button>
+        <div style={{ width: 30 }} />
       </div>
 
       <div style={{ padding: '0 24px', marginBottom: 16 }}>
@@ -957,6 +935,39 @@ function RecsScreen({ vibe, density, onBack, onLockedIn, votes, setVotes, recSta
             onNahh={() => setVote(v.id, 'nahh')}
           />
         ))}
+        {/* Big visible shuffle button BELOW the cards. The user wanted it
+            "down a bit, big and visible" — header version was too cramped
+            and the disabled state looked broken. Down here it reads as a
+            primary action: "didn't like these? show me different ones."
+            We hide it entirely when there's nothing to shuffle to (saves
+            real estate vs. a greyed-out button). */}
+        {!recState?.loading && !recState?.error && list.length > 0 && canShuffle && (
+          <button
+            onClick={onShuffle}
+            aria-label="Shuffle picks"
+            style={{
+              marginTop: 6,
+              padding: '16px 20px',
+              background: pal.cream,
+              border: `1.5px solid ${pal.ink}`,
+              borderRadius: T2.radii.pill,
+              color: pal.ink,
+              fontFamily: 'Inter, sans-serif',
+              fontSize: 15,
+              fontWeight: 600,
+              letterSpacing: '0.01em',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+              boxShadow: '0 2px 6px rgba(42, 36, 32, 0.06)',
+              width: '100%',
+            }}>
+            <span style={{ fontSize: 18 }}>↻</span>
+            Shuffle — show me 5 different
+          </button>
+        )}
         {!recState?.loading && !recState?.error && list.length > 0 && (
           <div style={{
             padding: 24,

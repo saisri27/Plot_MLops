@@ -76,16 +76,25 @@ window.PLOT_API = (function () {
 
   // ── /recommend ───────────────────────────────────────────────────
   // prefs = { budget, categories, max_distance_km }
+  // 25 s timeout: an LLM rerank with top_k=8 takes 5–10 s warm and up
+  // to ~15 s on a Cloud Run cold start. The default 15 s aborted the
+  // first request after a long idle, which the user saw as
+  // "Something went wrong fetching picks".
   function recommend(prefs, top_k = 5) {
-    return call('POST', '/recommend', {
-      users: [{
-        user_id: getUserId(),
-        budget: prefs.budget || 'medium',
-        categories: prefs.categories || ['Food & Drink'],
-        max_distance_km: prefs.max_distance_km || 5,
-      }],
-      top_k,
-    });
+    return call(
+      'POST',
+      '/recommend',
+      {
+        users: [{
+          user_id: getUserId(),
+          budget: prefs.budget || 'medium',
+          categories: prefs.categories || ['Food & Drink'],
+          max_distance_km: prefs.max_distance_km || 5,
+        }],
+        top_k,
+      },
+      25000,
+    );
   }
 
   // ── /events ──────────────────────────────────────────────────────

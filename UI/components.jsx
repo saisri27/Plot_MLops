@@ -240,10 +240,10 @@ function VenueCard({ venue, vibe = 'editorial', density = 'loose', onYay, onNahh
         : '0 2px 8px rgba(42, 36, 32, 0.04)',
       transform: vibe === 'playful' ? 'rotate(-0.4deg)' : 'none',
     }}>
-      {/* Hero zone — solid category color tint with the category icon
-          centered. Honest visual stand-in for venue imagery: we don't
-          fetch real photos yet, so this communicates the category at a
-          glance instead of pretending to be an image. */}
+      {/* Hero zone — show a real photo if we have one (Ticketmaster events
+          ship image_url; Google Places venues don't yet). Fall back to a
+          colored category tile + icon, which is honest about what data we
+          have rather than faking imagery with a stock placeholder. */}
       <div style={{ position: 'relative', padding: cardPad, paddingBottom: 0 }}>
         <div style={{
           width: '100%',
@@ -257,7 +257,26 @@ function VenueCard({ venue, vibe = 'editorial', density = 'loose', onYay, onNahh
           color: tintD,
           overflow: 'hidden',
         }}>
-          <CategoryIcon id={cat.id} size={heroIconSize} color={tintD} fillStyle="outline" />
+          {venue.image ? (
+            <img
+              src={venue.image}
+              alt={venue.name}
+              loading="lazy"
+              style={{
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover',
+                display: 'block',
+              }}
+              onError={(e) => {
+                // If the image fails (broken Ticketmaster URL etc.), hide
+                // it and let the category icon underneath show through.
+                e.currentTarget.style.display = 'none';
+              }}
+            />
+          ) : (
+            <CategoryIcon id={cat.id} size={heroIconSize} color={tintD} fillStyle="outline" />
+          )}
         </div>
         {/* category badge floating top-left */}
         <div style={{
