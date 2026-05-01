@@ -29,6 +29,12 @@ env/
 mlruns/
 mlartifacts/
 
+# Trained models (joblib artifacts written by notebooks/train_ranker.py)
+models/
+
+# Generated training datasets (rebuild from build_training_data.py)
+training_data/
+
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb
@@ -40,6 +46,15 @@ htmlcov/
 
 # Node / frontend
 node_modules/
+package.json
+package-lock.json
+
+# Archive files — never commit zips/tarballs (design-system exports,
+# raw API dumps, etc. belong outside git)
+*.zip
+*.tar
+*.tar.gz
+*.tgz
 
 # IDEs
 .vscode/
@@ -53,3 +68,9 @@ node_modules/
 
 # GCP
 .gcloud/
+
+# Claude Code session state
+.claude/
+
+# Session-specific HTML scratchpads
+today_progress.html
