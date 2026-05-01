@@ -39,6 +39,11 @@ function PlotApp() {
     last_prefs: null,
   });
 
+  // We pull a bigger pool from the LLM than we show so the user can
+  // "Shuffle" through different picks without a fresh /recommend round-trip.
+  const RECS_POOL_SIZE = 10;
+  const RECS_VISIBLE = 5;
+
   // Submit handler — called by SetPrefsScreen with the user's chosen prefs.
   // Fires /recommend and /events in parallel so the user only waits for
   // the slower of the two (LLM rerank ~800ms, BQ ~300ms).
@@ -47,13 +52,14 @@ function PlotApp() {
       loading: true, error: null, venues: [], events: [],
       rec_id: null, used_llm: false, llm_model: null,
       llm_latency_ms: null, last_prefs: prefs,
+      pool_offset: 0,
     });
     setScreen('recs');
     setVotes({});
     try {
       const [recRes, eventRes] = await Promise.all([
-        window.PLOT_API.recommend(prefs, 5).catch((e) => ({ _err: e })),
-        window.PLOT_API.events(prefs, 8).catch(() => ({ events: [] })),
+        window.PLOT_API.recommend(prefs, RECS_POOL_SIZE).catch((e) => ({ _err: e })),
+        window.PLOT_API.events(prefs, RECS_POOL_SIZE).catch(() => ({ events: [] })),
       ]);
       if (recRes && recRes._err) throw recRes._err;
       setRecState((s) => ({
@@ -71,6 +77,26 @@ function PlotApp() {
     }
   }
 
+  // Cycle the visible window through the cached pool. After we've shown
+  // every pick at least once, fall back to a fresh /recommend so the
+  // user is never stuck on the same set.
+  async function handleShuffle() {
+    if (!recState.last_prefs) return;
+    const totalCached = Math.max(recState.venues.length, recState.events.length);
+    const nextOffset = (recState.pool_offset || 0) + RECS_VISIBLE;
+
+    if (nextOffset < totalCached) {
+      // We still have unseen picks in the cached pool — just slide the
+      // window. No network call.
+      setRecState((s) => ({ ...s, pool_offset: nextOffset }));
+      setVotes({});
+      return;
+    }
+
+    // Pool exhausted: fetch a new round so the user sees genuinely new picks.
+    await handleSubmitPrefs(recState.last_prefs);
+  }
+
   const pal = window.PLOT_TOKENS.palette;
 
   // Map screen id → element
@@ -81,7 +107,7 @@ function PlotApp() {
       case 'home':     return <HomeScreen {...props} onOpenGroup={() => setScreen('prefs')} onCreate={() => setScreen('create')} onProfile={() => setScreen('profile')} />;
       case 'create':   return <CreateGroupScreen {...props} onBack={() => setScreen('home')} onCreated={() => setScreen('prefs')} />;
       case 'prefs':    return <SetPrefsScreen {...props} onBack={() => setScreen('home')} onSubmit={handleSubmitPrefs} />;
-      case 'recs':     return <RecsScreen {...props} recState={recState} votes={votes} setVotes={setVotes} onBack={() => setScreen('prefs')} onLockedIn={() => setScreen('decision')} />;
+      case 'recs':     return <RecsScreen {...props} recState={recState} votes={votes} setVotes={setVotes} onShuffle={handleShuffle} onBack={() => setScreen('prefs')} onLockedIn={() => setScreen('decision')} />;
       case 'decision': return <GroupDecisionScreen {...props} recState={recState} votes={votes} onBack={() => setScreen('recs')} onMemories={() => setScreen('memories')} />;
       case 'memories': return <MemoriesScreen {...props} onBack={() => setScreen('decision')} />;
       case 'profile':  return <ProfileScreen {...props} onBack={() => setScreen('home')} />;

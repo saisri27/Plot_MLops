@@ -786,16 +786,21 @@ function adaptEvent(e) {
   };
 }
 
-function RecsScreen({ vibe, density, onBack, onLockedIn, votes, setVotes, recState }) {
+function RecsScreen({ vibe, density, onBack, onLockedIn, votes, setVotes, recState, onShuffle }) {
   const pal = T2.palette;
   const [tab, setTab] = useState('places');
 
-  // Empty fallback while the very first /recommend call is in flight or
-  // before the user submits prefs. Both arrays are normalized through the
-  // adapter so VenueCard never sees the raw API shape.
-  const venues = (recState?.venues || []).map(adaptVenue);
-  const events = (recState?.events || []).map(adaptEvent);
+  // The full pool the LLM returned this round. We slice a 5-card window
+  // out of it; tapping Shuffle slides the window forward in app.jsx.
+  const VISIBLE = 5;
+  const offset = recState?.pool_offset || 0;
+  const allVenues = (recState?.venues || []).map(adaptVenue);
+  const allEvents = (recState?.events || []).map(adaptEvent);
+  const venues = allVenues.slice(offset, offset + VISIBLE);
+  const events = allEvents.slice(offset, offset + VISIBLE);
   const list = tab === 'places' ? venues : events;
+  const totalForTab = tab === 'places' ? allVenues.length : allEvents.length;
+  const canShuffle = totalForTab > VISIBLE;
 
   const setVote = (id, vote) => {
     setVotes((prev) => ({ ...prev, [id]: prev[id] === vote ? null : vote }));
@@ -829,7 +834,30 @@ function RecsScreen({ vibe, density, onBack, onLockedIn, votes, setVotes, recSta
         <SectionLabel vibe={vibe}>
           {recState?.used_llm ? 'LLM ranked' : 'rules ranked'} · {recState?.llm_latency_ms ? `${recState.llm_latency_ms}ms` : ''}
         </SectionLabel>
-        <div style={{ width: 30 }} />
+        {/* Shuffle: slide the visible 5-card window through the cached pool.
+            Disabled while loading or when the pool only has the 5 we showed. */}
+        <button
+          onClick={onShuffle}
+          disabled={!canShuffle || recState?.loading}
+          aria-label="Shuffle picks"
+          style={{
+            background: 'transparent',
+            border: `1.5px solid ${pal.line}`,
+            borderRadius: T2.radii.pill,
+            padding: '6px 12px',
+            color: canShuffle ? pal.ink : pal.inkMute,
+            fontFamily: 'Inter, sans-serif',
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: canShuffle ? 'pointer' : 'default',
+            opacity: canShuffle ? 1 : 0.4,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            whiteSpace: 'nowrap',
+          }}>
+          ↻ Shuffle
+        </button>
       </div>
 
       <div style={{ padding: '0 24px', marginBottom: 16 }}>

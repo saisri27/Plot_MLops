@@ -228,7 +228,6 @@ function VenueCard({ venue, vibe = 'editorial', density = 'loose', onYay, onNahh
   const cardPad = density === 'tight' ? 12 : 16;
 
   const heroIconSize = density === 'tight' ? 80 : 110;
-  const linkLabel = venue.date ? 'View event ↗' : 'Open in Maps ↗';
 
   return (
     <div style={{
@@ -282,7 +281,7 @@ function VenueCard({ venue, vibe = 'editorial', density = 'loose', onYay, onNahh
           <CategoryIcon id={cat.id} size={13} color={tintD} fillStyle="outline" />
           <span>{cat.label}</span>
         </div>
-        {/* event date badge if event */}
+        {/* event date badge — only when this is an event card */}
         {venue.date && (
           <div style={{
             position: 'absolute',
@@ -299,6 +298,35 @@ function VenueCard({ venue, vibe = 'editorial', density = 'loose', onYay, onNahh
           }}>
             {venue.date}
           </div>
+        )}
+        {/* Maps / event-page tap-through pinned to bottom-right of the hero
+            so it's actually visible (the inline-link version was getting lost
+            below the metadata strip). Stops click propagation so tapping the
+            button doesn't also fire any future card-level handler. */}
+        {venue.link && (
+          <a
+            href={venue.link}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: 'absolute',
+              bottom: 14,
+              right: cardPad + 10,
+              padding: '8px 12px',
+              background: pal.ink,
+              color: pal.cream,
+              borderRadius: T.radii.pill,
+              fontFamily: 'Inter, system-ui, sans-serif',
+              fontSize: 12,
+              fontWeight: 600,
+              textDecoration: 'none',
+              letterSpacing: '0.01em',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+              whiteSpace: 'nowrap',
+            }}>
+            {venue.date ? 'Tickets ↗' : 'Maps ↗'}
+          </a>
         )}
       </div>
 
@@ -337,28 +365,6 @@ function VenueCard({ venue, vibe = 'editorial', density = 'loose', onYay, onNahh
         }}>
           {vibe === 'playful' && '“'}{venue.reason}{vibe === 'playful' && '”'}
         </div>
-        {/* Tap-through to Google Maps for venues, or Ticketmaster for events.
-            Renders as a subtle inline link rather than a big button so it
-            doesn't compete visually with yay/nahh. */}
-        {venue.link && (
-          <a
-            href={venue.link}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{
-              display: 'inline-block',
-              marginBottom: 14,
-              fontFamily: 'Inter, system-ui, sans-serif',
-              fontSize: 12,
-              fontWeight: 500,
-              color: tintD,
-              textDecoration: 'underline',
-              textDecorationColor: tint,
-              textUnderlineOffset: 3,
-            }}>
-            {linkLabel}
-          </a>
-        )}
         <YayNahhButtons onYay={onYay} onNahh={onNahh} vibe={vibe} vote={vote} size={density === 'tight' ? 'md' : 'lg'} />
       </div>
     </div>

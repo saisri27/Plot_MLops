@@ -4,7 +4,9 @@
 // still need network, but the UI itself is cached). Network-first for
 // .html so design changes show up without a SW reset.
 
-const CACHE = 'plot-shell-v3';
+// Bump this on every UI deploy that ships JS/HTML changes — old clients
+// will purge their cached shell on next page load and pull the fresh files.
+const CACHE = 'plot-shell-v4';
 const SHELL = [
   '/Plot.html',
   '/tokens.js',
