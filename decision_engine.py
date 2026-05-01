@@ -17,6 +17,7 @@ Group preference merging logic:
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from typing import Any
 
 from dotenv import load_dotenv
@@ -309,6 +310,132 @@ def compute_score(
 TOP_N_FOR_LLM = 20
 
 
+@dataclass
+class _LLMRerankOutcome:
+    """
+    Resolved output of the optional LLM rerank step. Always includes a `final`
+    list — either the LLM's reordered picks or the v0 top-K fallback — and the
+    metadata the endpoint needs for both the response and the DB log.
+    Encapsulating it lets the orchestrator stay flat instead of juggling six
+    parallel optional variables.
+    """
+
+    final: list[dict[str, Any]]
+    used_llm: bool = False
+    llm_model: str | None = None
+    prompt_version: str | None = None
+    llm_latency_ms: int | None = None
+    llm_cost_usd: float | None = None
+    llm_picks_payload: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _score_and_rank(
+    venues: list[dict[str, Any]],
+    merged_budget: str,
+    merged_max_distance: float,
+    category_weights: dict[str, float],
+) -> list[dict[str, Any]]:
+    """v0 weighted-score every venue, attach `score` + `reason`, sort desc."""
+    scored: list[dict[str, Any]] = []
+    for venue in venues:
+        score, reason = compute_score(venue, merged_budget, merged_max_distance, category_weights)
+        scored.append({**venue, "score": score, "reason": reason})
+    return sorted(scored, key=lambda v: v["score"], reverse=True)
+
+
+def _run_llm_rerank(
+    candidates: list[dict[str, Any]],
+    merged: dict,
+    group_size: int,
+    top_k: int,
+) -> _LLMRerankOutcome:
+    """
+    Optional LLM rerank with full v0 fallback. Returns a populated outcome
+    no matter what — the caller never has to branch on missing keys.
+
+    Falls back to v0 (used_llm=False) when:
+      - OPENAI_API_KEY is missing (`llm_rerank.OPENAI_AVAILABLE` is False)
+      - The LLM call raises `LLMRerankError` (timeout, malformed JSON, etc.)
+      - The LLM returns 0 valid picks (every pick was hallucinated)
+    """
+    fallback = _LLMRerankOutcome(final=candidates[:top_k])
+
+    if not llm_rerank.OPENAI_AVAILABLE:
+        return fallback
+
+    try:
+        llm_picks, llm_meta = llm_rerank.rerank_venues(candidates, merged, group_size, top_k)
+    except llm_rerank.LLMRerankError as exc:
+        logger.warning("LLM rerank failed, falling back to v0: %s", exc)
+        return fallback
+
+    if not llm_picks:
+        logger.warning("LLM returned 0 valid picks; falling back to v0.")
+        return fallback
+
+    return _LLMRerankOutcome(
+        final=_merge_llm_picks(llm_picks, candidates),
+        used_llm=True,
+        llm_model=llm_meta.model,
+        prompt_version=llm_meta.prompt_version,
+        llm_latency_ms=llm_meta.latency_ms,
+        llm_cost_usd=llm_meta.cost_usd,
+        llm_picks_payload=[p.model_dump() for p in llm_picks],
+    )
+
+
+def _log_recommend_best_effort(
+    request: RecommendRequest,
+    merged_budget: str,
+    merged_max_distance: float,
+    all_categories: list[str],
+    candidates: list[dict[str, Any]],
+    outcome: _LLMRerankOutcome,
+    effective_model_version: str,
+) -> int | None:
+    """
+    Best-effort write of one /recommend call to Supabase. Returns the new
+    rec_id, or None on any failure (so the endpoint still returns 200).
+    Splitting the DB-log step out of the orchestrator means the happy path
+    in `recommend()` no longer has two layers of nested try/except.
+    """
+    if not DB_AVAILABLE:
+        return None
+
+    # Best-effort: ensure each user_id exists in `users` so future joins /
+    # dashboards have something to reference. Failures are non-fatal.
+    for u in request.users:
+        try:
+            upsert_user(
+                user_id=u.user_id,
+                default_budget=u.budget,
+                default_categories=u.categories,
+                default_max_distance_km=u.max_distance_km,
+            )
+        except Exception as exc:
+            logger.warning("upsert_user(%s) failed (non-fatal): %s", u.user_id, exc)
+
+    try:
+        return log_recommendation_request(
+            user_ids=[u.user_id for u in request.users],
+            merged_budget=merged_budget,
+            categories=all_categories,
+            top_venue_names=[v["name"] for v in outcome.final],
+            merged_max_distance_km=merged_max_distance,
+            group_size=len(request.users),
+            top_venues_payload=outcome.final,
+            request_context={"users": [u.model_dump() for u in request.users]},
+            model_version=effective_model_version,
+            candidate_set=candidates,
+            llm_picks=outcome.llm_picks_payload,
+            llm_latency_ms=outcome.llm_latency_ms,
+            llm_cost_usd=outcome.llm_cost_usd,
+        )
+    except Exception as exc:
+        logger.warning("DB log failed (non-fatal): %s", exc)
+        return None
+
+
 def _merge_llm_picks(
     picks: list[llm_rerank.LLMRerankResult],
     candidates: list[dict[str, Any]],
@@ -385,7 +512,6 @@ def recommend(request: RecommendRequest):
     merged = merge_preferences(request.users)
     merged_budget = merged["merged_budget"]
     merged_max_distance = merged["merged_max_distance"]
-    category_weights = merged["category_weights"]
     all_categories = merged["all_categories"]
 
     logger.info(
@@ -417,82 +543,29 @@ def recommend(request: RecommendRequest):
             recommendations=[],
         )
 
-    # 3. Score every venue
-    scored: list[dict[str, Any]] = []
-    for venue in venues:
-        score, reason = compute_score(venue, merged_budget, merged_max_distance, category_weights)
-        scored.append({**venue, "score": score, "reason": reason})
-
-    # 4. Rank and prepare LLM candidate set (top-N v0 picks)
-    ranked = sorted(scored, key=lambda v: v["score"], reverse=True)
+    # 3-4. Score, rank, take v0 top-N as LLM candidate set
+    ranked = _score_and_rank(venues, merged_budget, merged_max_distance, merged["category_weights"])
     candidates = ranked[:TOP_N_FOR_LLM]
 
-    # 5. LLM rerank with v0 fallback
-    used_llm = False
-    llm_model: str | None = None
-    prompt_version: str | None = None
-    llm_latency_ms: int | None = None
-    llm_cost_usd: float | None = None
-    llm_picks_payload: list[dict[str, Any]] = []
-    final = candidates[: request.top_k]
-
-    if llm_rerank.OPENAI_AVAILABLE:
-        try:
-            llm_picks, llm_meta = llm_rerank.rerank_venues(
-                candidates, merged, len(request.users), request.top_k
-            )
-            if llm_picks:
-                final = _merge_llm_picks(llm_picks, candidates)
-                used_llm = True
-                llm_model = llm_meta.model
-                prompt_version = llm_meta.prompt_version
-                llm_latency_ms = llm_meta.latency_ms
-                llm_cost_usd = llm_meta.cost_usd
-                llm_picks_payload = [p.model_dump() for p in llm_picks]
-            else:
-                # Lenient mode: every pick was hallucinated. Fall through to v0.
-                logger.warning("LLM returned 0 valid picks; falling back to v0.")
-        except llm_rerank.LLMRerankError as exc:
-            logger.warning("LLM rerank failed, falling back to v0: %s", exc)
-    # else: missing OPENAI_API_KEY logged once at module import; quietly use v0.
+    # 5. LLM rerank (with full v0 fallback)
+    outcome = _run_llm_rerank(candidates, merged, len(request.users), request.top_k)
 
     # The model_version stamped on the recommendation_log row reflects what
     # actually ranked the final list — not just what scored the candidates.
-    effective_model_version = f"{llm_model}+{prompt_version}" if used_llm else "rules_v1"
+    effective_model_version = (
+        f"{outcome.llm_model}+{outcome.prompt_version}" if outcome.used_llm else "rules_v1"
+    )
 
-    # 6. Log request to DB for analytics / retraining and capture rec_id
-    rec_id: int | None = None
-    if DB_AVAILABLE:
-        # Best-effort: make sure each user_id exists in `users` so future joins
-        # / dashboards have something to reference. Failures are non-fatal.
-        for u in request.users:
-            try:
-                upsert_user(
-                    user_id=u.user_id,
-                    default_budget=u.budget,
-                    default_categories=u.categories,
-                    default_max_distance_km=u.max_distance_km,
-                )
-            except Exception as exc:
-                logger.warning("upsert_user(%s) failed (non-fatal): %s", u.user_id, exc)
-        try:
-            rec_id = log_recommendation_request(
-                user_ids=[u.user_id for u in request.users],
-                merged_budget=merged_budget,
-                categories=all_categories,
-                top_venue_names=[v["name"] for v in final],
-                merged_max_distance_km=merged_max_distance,
-                group_size=len(request.users),
-                top_venues_payload=final,
-                request_context={"users": [u.model_dump() for u in request.users]},
-                model_version=effective_model_version,
-                candidate_set=candidates,
-                llm_picks=llm_picks_payload,
-                llm_latency_ms=llm_latency_ms,
-                llm_cost_usd=llm_cost_usd,
-            )
-        except Exception as exc:
-            logger.warning("DB log failed (non-fatal): %s", exc)
+    # 6. DB log (best-effort, returns None on any failure)
+    rec_id = _log_recommend_best_effort(
+        request,
+        merged_budget,
+        merged_max_distance,
+        all_categories,
+        candidates,
+        outcome,
+        effective_model_version,
+    )
 
     return RecommendResponse(
         rec_id=rec_id,
@@ -500,13 +573,13 @@ def recommend(request: RecommendRequest):
         merged_max_distance_km=merged_max_distance,
         merged_categories=all_categories,
         group_size=len(request.users),
-        venues_scored=len(scored),
+        venues_scored=len(venues),
         model_version=effective_model_version,
-        recommendations=[VenueResult(**v) for v in final],
-        used_llm=used_llm,
-        llm_model=llm_model,
-        prompt_version=prompt_version,
-        llm_latency_ms=llm_latency_ms,
+        recommendations=[VenueResult(**v) for v in outcome.final],
+        used_llm=outcome.used_llm,
+        llm_model=outcome.llm_model,
+        prompt_version=outcome.prompt_version,
+        llm_latency_ms=outcome.llm_latency_ms,
     )
 
 
