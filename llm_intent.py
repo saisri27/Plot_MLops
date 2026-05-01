@@ -32,10 +32,13 @@ PRICING_USD_PER_1M_TOKENS: dict[str, dict[str, float]] = {
     "gpt-4o": {"input": 2.50, "output": 10.00},
 }
 
-# Canonical list — must match demo.html CATEGORIES and the values used by
-# fetch_venues_from_bigquery's category filter. Keep in sync.
-# Religious Places removed: BigQuery only has 1 venue in that category, so the
-# chip used to look broken. Add it back if the scraper starts populating it.
+# Canonical list — must match demo.html CATEGORIES, UI/tokens.js categories,
+# and the values used by fetch_venues_from_bigquery's category filter.
+# Keep in sync across all three.
+# Religious Places removed: BigQuery only has 1 venue in that category.
+# Music & Live Shows added: 51% of upcoming Ticketmaster events fall under
+# the Music segment, so giving it its own chip lets the UI surface that
+# volume cleanly instead of bucketing it into Entertainment.
 ALLOWED_CATEGORIES: list[str] = [
     "Food & Drink",
     "Outdoors",
@@ -47,6 +50,7 @@ ALLOWED_CATEGORIES: list[str] = [
     "Shopping",
     "Classes & Workshops",
     "Pets & Animals",
+    "Music & Live Shows",
 ]
 
 ALLOWED_BUDGETS = {"low", "medium", "high"}

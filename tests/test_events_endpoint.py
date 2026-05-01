@@ -65,7 +65,7 @@ import recommendation_bigquery as rb  # noqa: E402
 @pytest.mark.parametrize(
     "segment, expected",
     [
-        ("Music", "Entertainment"),
+        ("Music", "Music & Live Shows"),  # Music has its own chip — 51% of event volume
         ("Arts & Theatre", "Arts & Culture"),
         ("Sports", "Sports & Recreation"),
         ("Family", "Entertainment"),
@@ -74,7 +74,7 @@ import recommendation_bigquery as rb  # noqa: E402
         ("Undefined", "Entertainment"),  # falls back
         ("", "Entertainment"),  # empty → fallback
         (None, "Entertainment"),
-        ("  Music  ", "Entertainment"),  # trims whitespace
+        ("  Music  ", "Music & Live Shows"),  # trims whitespace
     ],
 )
 def test_map_segment_to_category(segment, expected):

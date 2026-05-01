@@ -40,11 +40,14 @@ def _bq_client() -> bigquery.Client:
 
 
 # Ticketmaster's segment taxonomy is coarser than our user-facing 11 categories.
-# Anything not mapped (Undefined, Miscellaneous, NULL) is bucketed to Entertainment
-# so users still see those events under at least one chip; previously they were
-# unreachable. Tune this mapping when we add a "Family"/"Film" feed.
+# Music gets its own chip ("Music & Live Shows") because it's 51% of upcoming
+# event volume — collapsing it into Entertainment hid the signal.
+# Anything not mapped (Undefined, Miscellaneous, NULL) is bucketed to
+# Entertainment so users still see those events under at least one chip;
+# previously they were unreachable. Tune this mapping when we add a
+# "Family"/"Film" feed.
 SEGMENT_TO_CATEGORY: dict[str, str] = {
-    "Music": "Entertainment",
+    "Music": "Music & Live Shows",
     "Arts & Theatre": "Arts & Culture",
     "Sports": "Sports & Recreation",
     "Family": "Entertainment",
