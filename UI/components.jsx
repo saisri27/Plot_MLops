@@ -221,10 +221,14 @@ function VenueCard({ venue, vibe = 'editorial', density = 'loose', onYay, onNahh
   const pal = T.palette;
   const cat = T.categories.find(c => c.id === venue.category);
   const tint = pal[cat.color];
+  const tintL = pal[cat.color + 'L'];
   const tintD = pal[cat.color + 'D'];
 
   const photoH = density === 'tight' ? 180 : 240;
   const cardPad = density === 'tight' ? 12 : 16;
+
+  const heroIconSize = density === 'tight' ? 80 : 110;
+  const linkLabel = venue.date ? 'View event ↗' : 'Open in Maps ↗';
 
   return (
     <div style={{
@@ -237,29 +241,46 @@ function VenueCard({ venue, vibe = 'editorial', density = 'loose', onYay, onNahh
         : '0 2px 8px rgba(42, 36, 32, 0.04)',
       transform: vibe === 'playful' ? 'rotate(-0.4deg)' : 'none',
     }}>
-      {/* Photo zone — 60%+ of card */}
+      {/* Hero zone — solid category color tint with the category icon
+          centered. Honest visual stand-in for venue imagery: we don't
+          fetch real photos yet, so this communicates the category at a
+          glance instead of pretending to be an image. */}
       <div style={{ position: 'relative', padding: cardPad, paddingBottom: 0 }}>
-        <StripedPlaceholder
-          label={venue.name}
-          height={photoH}
-          tone={cat.color}
-          vibe={vibe}
-        />
-        {/* category icon chip floating top-left */}
+        <div style={{
+          width: '100%',
+          height: photoH,
+          borderRadius: T.radii.md,
+          background: tintL,
+          border: vibe === 'playful' ? `1.5px solid ${tintD}` : `1px solid ${pal.line}`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: tintD,
+          overflow: 'hidden',
+        }}>
+          <CategoryIcon id={cat.id} size={heroIconSize} color={tintD} fillStyle="outline" />
+        </div>
+        {/* category badge floating top-left */}
         <div style={{
           position: 'absolute',
           top: cardPad + 10,
           left: cardPad + 10,
-          width: 36, height: 36,
-          borderRadius: vibe === 'playful' ? 10 : T.radii.pill,
+          padding: '6px 10px',
+          borderRadius: T.radii.pill,
           background: pal.cream,
+          color: tintD,
           border: `1.5px solid ${tint}`,
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'center',
-          boxShadow: '0 2px 6px rgba(0,0,0,0.08)',
+          gap: 6,
+          fontFamily: 'Inter, system-ui, sans-serif',
+          fontSize: 11,
+          fontWeight: 600,
+          letterSpacing: '0.02em',
+          boxShadow: '0 2px 6px rgba(0,0,0,0.06)',
         }}>
-          <CategoryIcon id={cat.id} size={18} color={tintD} fillStyle="outline" />
+          <CategoryIcon id={cat.id} size={13} color={tintD} fillStyle="outline" />
+          <span>{cat.label}</span>
         </div>
         {/* event date badge if event */}
         {venue.date && (
@@ -302,7 +323,9 @@ function VenueCard({ venue, vibe = 'editorial', density = 'loose', onYay, onNahh
           letterSpacing: '0.02em',
           marginBottom: 8,
         }}>
-          {venue.distance} · {venue.rating}★ · {'$'.repeat(venue.price)}
+          {venue.distance}
+          {venue.rating ? ` · ${venue.rating}★` : ''}
+          {venue.price ? ` · ${'$'.repeat(venue.price)}` : ''}
         </div>
         <div style={{
           fontFamily: 'Inter, system-ui, sans-serif',
@@ -310,11 +333,32 @@ function VenueCard({ venue, vibe = 'editorial', density = 'loose', onYay, onNahh
           fontWeight: 400,
           color: pal.inkSoft,
           lineHeight: 1.4,
-          marginBottom: 14,
-          fontStyle: vibe === 'playful' ? 'normal' : 'normal',
+          marginBottom: venue.link ? 8 : 14,
         }}>
           {vibe === 'playful' && '“'}{venue.reason}{vibe === 'playful' && '”'}
         </div>
+        {/* Tap-through to Google Maps for venues, or Ticketmaster for events.
+            Renders as a subtle inline link rather than a big button so it
+            doesn't compete visually with yay/nahh. */}
+        {venue.link && (
+          <a
+            href={venue.link}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: 'inline-block',
+              marginBottom: 14,
+              fontFamily: 'Inter, system-ui, sans-serif',
+              fontSize: 12,
+              fontWeight: 500,
+              color: tintD,
+              textDecoration: 'underline',
+              textDecorationColor: tint,
+              textUnderlineOffset: 3,
+            }}>
+            {linkLabel}
+          </a>
+        )}
         <YayNahhButtons onYay={onYay} onNahh={onNahh} vibe={vibe} vote={vote} size={density === 'tight' ? 'md' : 'lg'} />
       </div>
     </div>

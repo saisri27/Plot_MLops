@@ -750,6 +750,7 @@ function adaptVenue(v) {
     rating: v.rating || 0,
     price: PRICE_LEVEL_TO_TIER[v.price_level] || 2,
     reason: v.reason || '',
+    link: v.google_maps_uri || null,                      // tap-through target
   };
 }
 
@@ -781,6 +782,7 @@ function adaptEvent(e) {
     price: priceTier,
     reason: e.venue_name || '',
     date: dateStr,
+    link: e.event_url || null,                            // tap-through target
   };
 }
 
