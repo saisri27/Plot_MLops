@@ -79,6 +79,32 @@ function PlotApp() {
     }
   }
 
+  // "We went" tap on Group Decision: log the strongest feedback signal
+  // (visited) to Supabase AND save a local memory for the UI gallery.
+  // Both are best-effort: a network failure on /feedback shouldn't stop
+  // the user from seeing the memory in the next screen.
+  async function handleWentThere(locked) {
+    if (!locked) {
+      setScreen('memories');
+      return;
+    }
+    // Save locally first so the UI is always responsive
+    const memory = window.PLOT_API.addMemory({
+      name: locked.name,
+      category: locked.category,
+      link: locked.link || null,
+      image: locked.image || null,
+      reason: locked.reason || '',
+      rec_id: recState?.rec_id || null,
+    });
+    // Then fire-and-forget the feedback call — failure is non-fatal
+    if (recState?.rec_id) {
+      window.PLOT_API.feedback(recState.rec_id, locked.name, 'visited').catch(() => {});
+    }
+    setScreen('memories');
+    return memory;
+  }
+
   // Cycle the visible window through the cached pool. After we've shown
   // every pick at least once, fall back to a fresh /recommend so the
   // user is never stuck on the same set.
@@ -110,7 +136,7 @@ function PlotApp() {
       case 'create':   return <CreateGroupScreen {...props} onBack={() => setScreen('home')} onCreated={() => setScreen('prefs')} />;
       case 'prefs':    return <SetPrefsScreen {...props} onBack={() => setScreen('home')} onSubmit={handleSubmitPrefs} />;
       case 'recs':     return <RecsScreen {...props} recState={recState} votes={votes} setVotes={setVotes} onShuffle={handleShuffle} onBack={() => setScreen('prefs')} onLockedIn={() => setScreen('decision')} />;
-      case 'decision': return <GroupDecisionScreen {...props} recState={recState} votes={votes} onBack={() => setScreen('recs')} onMemories={() => setScreen('memories')} />;
+      case 'decision': return <GroupDecisionScreen {...props} recState={recState} votes={votes} onBack={() => setScreen('recs')} onMemories={() => setScreen('memories')} onWentThere={handleWentThere} />;
       case 'memories': return <MemoriesScreen {...props} onBack={() => setScreen('decision')} />;
       case 'profile':  return <ProfileScreen {...props} onBack={() => setScreen('home')} />;
       default: return null;

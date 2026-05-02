@@ -123,6 +123,93 @@ window.PLOT_API = (function () {
     });
   }
 
+  // ── Memories (localStorage-backed for the 4-day demo) ────────────
+  // We don't yet have a backend table for visited places + photos.
+  // For the demo we persist memories per-browser in localStorage. The
+  // /feedback signal=visited still goes to Supabase so the ML pipeline
+  // sees the strongest training signal — this localStorage layer is
+  // only the UI's "Memories" gallery cache.
+  const MEM_KEY = 'plot_memories_v1';
+
+  function getMemories() {
+    try {
+      const raw = localStorage.getItem(MEM_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function _saveMemories(arr) {
+    try {
+      localStorage.setItem(MEM_KEY, JSON.stringify(arr));
+    } catch (e) {
+      // Quota usually means an oversized photo. The caller is responsible
+      // for compressing before they hand us a dataURL; if we still
+      // overflow we just drop the oldest memory and retry once.
+      if (e && e.name === 'QuotaExceededError' && arr.length > 1) {
+        try {
+          localStorage.setItem(MEM_KEY, JSON.stringify(arr.slice(1)));
+        } catch (e2) {
+          /* give up silently — UI shows what fits */
+        }
+      }
+    }
+  }
+
+  function addMemory(memory) {
+    const list = getMemories();
+    // Keep only one entry per (venue + visit-day) so re-clicking "We went"
+    // doesn't duplicate.
+    const day = (memory.visited_at || new Date().toISOString()).slice(0, 10);
+    const filtered = list.filter(
+      (m) => !(m.name === memory.name && (m.visited_at || '').slice(0, 10) === day)
+    );
+    const stamped = {
+      id: `${memory.name}__${day}`.replace(/[^a-zA-Z0-9_-]/g, '_'),
+      visited_at: memory.visited_at || new Date().toISOString(),
+      photo: null,
+      ...memory,
+    };
+    const next = [stamped, ...filtered];
+    _saveMemories(next);
+    return stamped;
+  }
+
+  function setMemoryPhoto(id, dataURL) {
+    const list = getMemories();
+    const next = list.map((m) => (m.id === id ? { ...m, photo: dataURL } : m));
+    _saveMemories(next);
+  }
+
+  // Compress a File from <input type=file accept=image/*> into a JPEG
+  // dataURL that's small enough to fit in localStorage (which caps at
+  // ~5 MB total per origin in most browsers). Resizes to maxDim and
+  // re-encodes at the given quality — typical iPhone photo (3 MB) ends
+  // up ~150–300 KB after compression.
+  function compressImageFile(file, maxDim = 900, quality = 0.72) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('read failed'));
+      reader.onload = (ev) => {
+        const img = new Image();
+        img.onerror = () => reject(new Error('decode failed'));
+        img.onload = () => {
+          const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+          const w = Math.round(img.width * scale);
+          const h = Math.round(img.height * scale);
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        };
+        img.src = ev.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
   return {
     API_BASE,
     getUserId,
@@ -132,5 +219,10 @@ window.PLOT_API = (function () {
     feedback,
     chipIdsToCategories,
     apiNameToChipId: (name) => API_NAME_TO_ID[name],
+    // Memories (localStorage-backed for now)
+    getMemories,
+    addMemory,
+    setMemoryPhoto,
+    compressImageFile,
   };
 })();

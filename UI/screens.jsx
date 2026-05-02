@@ -992,7 +992,7 @@ function RecsScreen({ vibe, density, onBack, onLockedIn, votes, setVotes, recSta
 // ─────────────────────────────────────────────────────────────
 // 6. Group Decision — locked-in pick + member votes
 // ─────────────────────────────────────────────────────────────
-function GroupDecisionScreen({ vibe, votes, onBack, onMemories, recState }) {
+function GroupDecisionScreen({ vibe, votes, onBack, onMemories, onWentThere, recState }) {
   const pal = T2.palette;
 
   // Find the user's first yay venue from the real Recs data they just voted on.
@@ -1024,7 +1024,7 @@ function GroupDecisionScreen({ vibe, votes, onBack, onMemories, recState }) {
       footer={
         <div style={{ display: 'flex', gap: 10 }}>
           <button
-            onClick={onMemories}
+            onClick={() => (onWentThere ? onWentThere(locked) : onMemories && onMemories())}
             style={{
               flex: 1, height: 52,
               borderRadius: vibe === 'playful' ? T2.radii.lg : T2.radii.pill,
@@ -1178,9 +1178,145 @@ function GroupDecisionScreen({ vibe, votes, onBack, onMemories, recState }) {
 // ─────────────────────────────────────────────────────────────
 // 7. Memories
 // ─────────────────────────────────────────────────────────────
+// Tile shown in the grid for one stored memory. The "wallpaper" image
+// renders edge-to-edge if the user has uploaded one or if it's an event
+// (Ticketmaster image_url). Otherwise we fall back to the colored
+// category tile + icon, same visual language as the rec card.
+function MemoryTile({ m, onOpen, onAddPhoto, vibe }) {
+  const pal = T2.palette;
+  const cat = T2.categories.find((c) => c.id === m.category);
+  const tintL = pal[(cat?.color || 'sage') + 'L'];
+  const tintD = pal[(cat?.color || 'sage') + 'D'];
+  const wallpaper = m.photo || m.image || null;
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <button
+        onClick={() => onOpen(m)}
+        style={{
+          width: '100%',
+          padding: 0,
+          border: 'none',
+          background: 'transparent',
+          cursor: 'pointer',
+          position: 'relative',
+          height: 140,
+          borderRadius: T2.radii.md,
+          overflow: 'hidden',
+        }}>
+        {wallpaper ? (
+          <img
+            src={wallpaper}
+            alt={m.name}
+            loading="lazy"
+            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+            onError={(e) => { e.currentTarget.style.display = 'none'; }}
+          />
+        ) : (
+          <div style={{
+            width: '100%', height: '100%',
+            background: tintL,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            border: `1px solid ${pal.line}`,
+            borderRadius: T2.radii.md,
+          }}>
+            <CategoryIcon id={cat?.id || 'food'} size={56} color={tintD} fillStyle="outline" />
+          </div>
+        )}
+        <div style={{
+          position: 'absolute',
+          bottom: 10, right: 10,
+          padding: '3px 7px',
+          background: pal.ink,
+          color: pal.cream,
+          borderRadius: 4,
+          fontFamily: '"JetBrains Mono", monospace',
+          fontSize: 9, fontWeight: 500,
+          letterSpacing: '0.06em',
+        }}>{(m.visited_at || '').slice(5, 10)}</div>
+        <div style={{
+          position: 'absolute',
+          top: 8, left: 8,
+          padding: '4px 8px',
+          background: 'rgba(255,255,255,0.92)',
+          color: pal.ink,
+          borderRadius: T2.radii.pill,
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 10, fontWeight: 600,
+          maxWidth: 'calc(100% - 16px)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}>{m.name}</div>
+      </button>
+      {!m.photo && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onAddPhoto(m); }}
+          aria-label="Add memory photo"
+          style={{
+            position: 'absolute',
+            bottom: 10, left: 10,
+            width: 32, height: 32,
+            borderRadius: T2.radii.pill,
+            background: pal.cream,
+            border: `1.5px solid ${pal.ink}`,
+            color: pal.ink,
+            fontFamily: 'Inter, sans-serif',
+            fontSize: 16,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            boxShadow: '0 2px 6px rgba(0,0,0,0.15)',
+          }}>
+          📷
+        </button>
+      )}
+    </div>
+  );
+}
+
 function MemoriesScreen({ vibe, onBack }) {
   const pal = T2.palette;
+  const [memories, setMemories] = useState(() => window.PLOT_API.getMemories());
   const [open, setOpen] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState(null);
+  const fileInputRef = React.useRef(null);
+  const targetMemoryRef = React.useRef(null);
+
+  // Trigger the hidden <input type=file> for a specific memory.
+  // accept=image/* + capture=environment hints to mobile browsers to
+  // open the camera (with a "Photo Library" alternative on iOS).
+  function startAddPhoto(memory) {
+    targetMemoryRef.current = memory;
+    setUploadError(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+      fileInputRef.current.click();
+    }
+  }
+
+  async function handleFileSelected(e) {
+    const file = e.target.files && e.target.files[0];
+    const target = targetMemoryRef.current;
+    if (!file || !target) return;
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const dataURL = await window.PLOT_API.compressImageFile(file, 900, 0.72);
+      window.PLOT_API.setMemoryPhoto(target.id, dataURL);
+      const fresh = window.PLOT_API.getMemories();
+      setMemories(fresh);
+      const updated = fresh.find((m) => m.id === target.id);
+      if (open && open.id === target.id && updated) setOpen(updated);
+    } catch (err) {
+      setUploadError(String(err.message || err));
+    } finally {
+      setUploading(false);
+      targetMemoryRef.current = null;
+    }
+  }
 
   return (
     <ScreenShell vibe={vibe} bg={pal.cream} padTop={50}>
@@ -1200,46 +1336,77 @@ function MemoriesScreen({ vibe, onBack }) {
           color: pal.ink,
           textWrap: 'pretty',
         }}>
-          6 hangouts so far.
+          {memories.length === 0
+            ? 'No memories yet.'
+            : `${memories.length} hangout${memories.length === 1 ? '' : 's'} so far.`}
         </div>
+        {uploadError && (
+          <div style={{
+            marginTop: 8,
+            fontFamily: 'Inter, sans-serif',
+            fontSize: 12,
+            color: pal.terracottaD,
+          }}>
+            Couldn't add photo — {uploadError}
+          </div>
+        )}
+        {uploading && (
+          <div style={{
+            marginTop: 8,
+            fontFamily: 'Inter, sans-serif',
+            fontSize: 12,
+            color: pal.inkSoft,
+          }}>
+            Saving photo…
+          </div>
+        )}
       </div>
 
-      <div style={{
-        padding: '0 16px',
-        display: 'grid',
-        gridTemplateColumns: '1fr 1fr',
-        gap: 8,
-      }}>
-        {SAMPLE_MEMORIES.map((m) => (
-          <button
-            key={m.id}
-            onClick={() => setOpen(m)}
-            style={{
-              padding: 0, border: 'none', background: 'transparent',
-              cursor: 'pointer', position: 'relative',
-              transform: vibe === 'playful' ? `rotate(${(parseInt(m.id.slice(-1), 10) % 2 === 0 ? -0.6 : 0.5)}deg)` : 'none',
-            }}>
-            <StripedPlaceholder
-              label={m.venue}
-              height={140}
-              tone={m.tone}
+      {memories.length === 0 ? (
+        <div style={{ padding: '0 24px' }}>
+          <div style={{
+            padding: 24,
+            borderRadius: T2.radii.md,
+            background: pal.creamSoft,
+            border: `1px dashed ${pal.line}`,
+            color: pal.inkSoft,
+            fontFamily: 'Inter, sans-serif',
+            fontSize: 13,
+            textAlign: 'center',
+          }}>
+            Lock in a place and tap "We went →" — it'll show up here.
+          </div>
+        </div>
+      ) : (
+        <div style={{
+          padding: '0 16px',
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: 8,
+        }}>
+          {memories.map((m) => (
+            <MemoryTile
+              key={m.id}
+              m={m}
               vibe={vibe}
-              radius={T2.radii.md}
+              onOpen={setOpen}
+              onAddPhoto={startAddPhoto}
             />
-            <div style={{
-              position: 'absolute',
-              bottom: 10, right: 10,
-              padding: '3px 7px',
-              background: pal.ink,
-              color: pal.cream,
-              borderRadius: 4,
-              fontFamily: '"JetBrains Mono", monospace',
-              fontSize: 9, fontWeight: 500,
-              letterSpacing: '0.06em',
-            }}>{m.date}</div>
-          </button>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
+
+      {/* Hidden file input — triggered by the per-tile camera button.
+          capture=environment makes mobile browsers default to the camera;
+          users can still pick from their library via the same dialog. */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        onChange={handleFileSelected}
+        style={{ display: 'none' }}
+      />
 
       {open && (
         <div
@@ -1253,11 +1420,75 @@ function MemoriesScreen({ vibe, onBack }) {
             justifyContent: 'center',
             padding: 20,
           }}>
-          <div style={{ width: '100%' }}>
-            <StripedPlaceholder label={open.venue} height={400} tone={open.tone} vibe={vibe} radius={T2.radii.lg} />
+          <div style={{ width: '100%' }} onClick={(e) => e.stopPropagation()}>
+            {(() => {
+              const wallpaper = open.photo || open.image;
+              if (wallpaper) {
+                return (
+                  <img
+                    src={wallpaper}
+                    alt={open.name}
+                    style={{
+                      width: '100%', height: 400, objectFit: 'cover',
+                      borderRadius: T2.radii.lg, display: 'block',
+                    }}
+                  />
+                );
+              }
+              const cat = T2.categories.find((c) => c.id === open.category);
+              const tintL = pal[(cat?.color || 'sage') + 'L'];
+              const tintD = pal[(cat?.color || 'sage') + 'D'];
+              return (
+                <div style={{
+                  width: '100%', height: 400,
+                  background: tintL,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  borderRadius: T2.radii.lg,
+                }}>
+                  <CategoryIcon id={cat?.id || 'food'} size={140} color={tintD} fillStyle="outline" />
+                </div>
+              );
+            })()}
             <div style={{ padding: '20px 4px 0', color: pal.cream }}>
-              <div style={{ fontFamily: 'Inter, sans-serif', fontSize: 22, fontWeight: 500, letterSpacing: '-0.01em' }}>{open.venue}</div>
-              <div style={{ fontFamily: '"JetBrains Mono", monospace', fontSize: 11, color: 'rgba(247,239,226,0.6)', letterSpacing: '0.06em', textTransform: 'uppercase', marginTop: 4 }}>{open.date} · with sunday soft life</div>
+              <div style={{ fontFamily: 'Inter, sans-serif', fontSize: 22, fontWeight: 500, letterSpacing: '-0.01em' }}>{open.name}</div>
+              <div style={{ fontFamily: '"JetBrains Mono", monospace', fontSize: 11, color: 'rgba(247,239,226,0.6)', letterSpacing: '0.06em', textTransform: 'uppercase', marginTop: 4 }}>
+                {(open.visited_at || '').slice(0, 10)} · we went
+              </div>
+            </div>
+            <div style={{ marginTop: 16, display: 'flex', gap: 10, justifyContent: 'center' }}>
+              <button
+                onClick={() => startAddPhoto(open)}
+                style={{
+                  padding: '12px 18px',
+                  borderRadius: T2.radii.pill,
+                  background: pal.cream,
+                  color: pal.ink,
+                  border: 'none',
+                  fontFamily: 'Inter, sans-serif',
+                  fontSize: 14, fontWeight: 600,
+                  cursor: 'pointer',
+                }}>
+                {open.photo ? 'Replace photo' : '📷 Add photo'}
+              </button>
+              {open.link && (
+                <a
+                  href={open.link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    padding: '12px 18px',
+                    borderRadius: T2.radii.pill,
+                    background: 'transparent',
+                    color: pal.cream,
+                    border: `1.5px solid ${pal.cream}`,
+                    fontFamily: 'Inter, sans-serif',
+                    fontSize: 14, fontWeight: 600,
+                    textDecoration: 'none',
+                  }}>
+                  Maps ↗
+                </a>
+              )}
             </div>
           </div>
         </div>
