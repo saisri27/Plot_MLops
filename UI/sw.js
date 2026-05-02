@@ -6,7 +6,7 @@
 
 // Bump this on every UI deploy that ships JS/HTML changes — old clients
 // will purge their cached shell on next page load and pull the fresh files.
-const CACHE = 'plot-shell-v6';
+const CACHE = 'plot-shell-v7';
 const SHELL = [
   '/Plot.html',
   '/tokens.js',

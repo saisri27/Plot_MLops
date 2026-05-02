@@ -123,6 +123,99 @@ window.PLOT_API = (function () {
     });
   }
 
+  // ── /groups (multi-user shareable-link sessions) ─────────────────
+
+  function createGroup(name, displayName) {
+    return call('POST', '/groups', {
+      name,
+      creator_user_id: getUserId(),
+      creator_display_name: displayName || null,
+    });
+  }
+
+  function peekGroupByToken(token) {
+    return call('GET', `/groups/by-token/${encodeURIComponent(token)}`);
+  }
+
+  function joinGroupAPI(groupId, displayName) {
+    return call('POST', `/groups/${encodeURIComponent(groupId)}/join`, {
+      user_id: getUserId(),
+      display_name: displayName,
+    });
+  }
+
+  function setGroupPrefs(groupId, prefs) {
+    return call('POST', `/groups/${encodeURIComponent(groupId)}/prefs`, {
+      user_id: getUserId(),
+      budget: prefs.budget || 'medium',
+      categories: prefs.categories || [],
+      max_distance_km: prefs.max_distance_km || 5,
+    });
+  }
+
+  function getGroupState(groupId) {
+    return call('GET', `/groups/${encodeURIComponent(groupId)}`);
+  }
+
+  // 25 s timeout to match the solo /recommend — group rerank is the same
+  // LLM call, just with merged-pref input.
+  function groupRecommend(groupId, top_k = 5) {
+    return call(
+      'POST',
+      `/groups/${encodeURIComponent(groupId)}/recommend`,
+      { requested_by: getUserId(), top_k },
+      25000,
+    );
+  }
+
+  function groupVote(groupId, venueName, signal) {
+    return call('POST', `/groups/${encodeURIComponent(groupId)}/vote`, {
+      user_id: getUserId(),
+      venue_name: venueName,
+      signal,
+    });
+  }
+
+  function listMyGroups() {
+    return call('GET', `/users/${encodeURIComponent(getUserId())}/groups`);
+  }
+
+  // ── currentGroup (the group the user is actively planning in) ────
+  // Stored in localStorage so a refresh keeps you in your group rather
+  // than dumping you back to the solo flow.
+  const CURRENT_GROUP_KEY = 'plot_current_group_v1';
+
+  function getCurrentGroup() {
+    try {
+      const raw = localStorage.getItem(CURRENT_GROUP_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function setCurrentGroup(group) {
+    try {
+      localStorage.setItem(CURRENT_GROUP_KEY, JSON.stringify(group));
+    } catch (e) { /* quota — ignore */ }
+  }
+
+  function clearCurrentGroup() {
+    try { localStorage.removeItem(CURRENT_GROUP_KEY); } catch (e) { /* ignore */ }
+  }
+
+  // ── User display name (for sign-in / group join) ─────────────────
+  // Survives sign-out so returning users don't have to retype.
+  const NAME_KEY = 'plot_display_name_v1';
+
+  function getDisplayName() {
+    try { return localStorage.getItem(NAME_KEY) || ''; } catch (e) { return ''; }
+  }
+
+  function setDisplayName(name) {
+    try { localStorage.setItem(NAME_KEY, name); } catch (e) { /* ignore */ }
+  }
+
   // ── Memories (localStorage-backed for the 4-day demo) ────────────
   // We don't yet have a backend table for visited places + photos.
   // For the demo we persist memories per-browser in localStorage. The
@@ -224,5 +317,19 @@ window.PLOT_API = (function () {
     addMemory,
     setMemoryPhoto,
     compressImageFile,
+    // Groups
+    createGroup,
+    peekGroupByToken,
+    joinGroupAPI,
+    setGroupPrefs,
+    getGroupState,
+    groupRecommend,
+    groupVote,
+    listMyGroups,
+    getCurrentGroup,
+    setCurrentGroup,
+    clearCurrentGroup,
+    getDisplayName,
+    setDisplayName,
   };
 })();

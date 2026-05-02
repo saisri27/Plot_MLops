@@ -148,6 +148,176 @@ function PlotWordmark({ size = 56, ink, terracotta, vibe }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────
+// Join group landing — what a friend sees when they tap an invite link
+// (URL contains ?join=<token>). Fetches the group preview, asks for a
+// display name, calls /groups/{id}/join, then the parent routes them
+// into the prefs flow.
+// ─────────────────────────────────────────────────────────────
+function JoinGroupScreen({ vibe, token, onBack, onJoined }) {
+  const pal = T2.palette;
+  const [preview, setPreview] = useState(null);
+  const [previewError, setPreviewError] = useState(null);
+  const [name, setName] = useState(() => window.PLOT_API.getDisplayName());
+  const [joining, setJoining] = useState(false);
+  const [joinError, setJoinError] = useState(null);
+
+  useEffect(() => {
+    if (!token) {
+      setPreviewError('No invite token in the URL.');
+      return;
+    }
+    let cancelled = false;
+    window.PLOT_API.peekGroupByToken(token)
+      .then((p) => { if (!cancelled) setPreview(p); })
+      .catch((e) => { if (!cancelled) setPreviewError(String(e.message || e)); });
+    return () => { cancelled = true; };
+  }, [token]);
+
+  async function handleJoin() {
+    if (!preview || !name.trim() || joining) return;
+    setJoining(true);
+    setJoinError(null);
+    const trimmed = name.trim();
+    window.PLOT_API.setDisplayName(trimmed);
+    try {
+      await window.PLOT_API.joinGroupAPI(preview.id, trimmed);
+      onJoined({
+        id: preview.id,
+        name: preview.name,
+        invite_token: preview.invite_token,
+        my_display_name: trimmed,
+      });
+    } catch (err) {
+      setJoinError(String(err.message || err));
+      setJoining(false);
+    }
+  }
+
+  return (
+    <ScreenShell vibe={vibe} bg={pal.cream} padTop={50}>
+      <div style={{ padding: '8px 24px 0', display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
+        <button onClick={onBack} style={{
+          background: 'transparent', border: 'none', cursor: 'pointer',
+          padding: 4, color: pal.ink, fontSize: 22, fontFamily: 'inherit',
+        }}>←</button>
+        <SectionLabel vibe={vibe}>You've been invited</SectionLabel>
+      </div>
+
+      <div style={{ padding: '0 24px', flex: 1 }}>
+        {previewError && (
+          <div style={{
+            padding: 16,
+            borderRadius: T2.radii.md,
+            background: pal.terracottaL,
+            color: pal.terracottaD,
+            fontFamily: 'Inter, sans-serif',
+            fontSize: 13,
+            marginBottom: 24,
+          }}>
+            {previewError}
+          </div>
+        )}
+
+        {!preview && !previewError && (
+          <div style={{
+            padding: 24,
+            textAlign: 'center',
+            color: pal.inkSoft,
+            fontFamily: 'Inter, sans-serif',
+            fontSize: 14,
+          }}>
+            <div style={{
+              width: 24, height: 24, margin: '0 auto 16px',
+              border: `2.5px solid ${pal.line}`,
+              borderTopColor: pal.terracotta,
+              borderRadius: '50%',
+              animation: 'plotspin 0.9s linear infinite',
+            }} />
+            Loading invite…
+            <style>{`@keyframes plotspin { to { transform: rotate(360deg); } }`}</style>
+          </div>
+        )}
+
+        {preview && (
+          <>
+            <div style={{
+              fontFamily: 'Inter, sans-serif',
+              fontSize: 32, fontWeight: 500,
+              letterSpacing: '-0.02em',
+              color: pal.ink,
+              lineHeight: 1.1,
+              textWrap: 'pretty',
+              marginBottom: 8,
+            }}>
+              Join {preview.name}
+            </div>
+            <div style={{
+              fontFamily: 'Inter, sans-serif',
+              fontSize: 14, color: pal.inkSoft, marginBottom: 28,
+            }}>
+              {preview.member_count} member{preview.member_count === 1 ? '' : 's'} so far · pick a place together
+            </div>
+
+            <div style={{
+              fontFamily: 'Inter, sans-serif',
+              fontSize: 12, fontWeight: 600,
+              color: pal.inkMute,
+              letterSpacing: '0.06em',
+              textTransform: 'uppercase',
+              marginBottom: 8,
+            }}>
+              your name
+            </div>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Sai"
+              autoFocus
+              style={{
+                width: '100%',
+                padding: '12px 0',
+                background: 'transparent',
+                border: 'none',
+                borderBottom: `1.5px solid ${pal.line}`,
+                fontFamily: 'Inter, sans-serif',
+                fontSize: 22, fontWeight: 500,
+                color: pal.ink,
+                outline: 'none',
+                marginBottom: 24,
+                boxSizing: 'border-box',
+              }}
+            />
+
+            {joinError && (
+              <div style={{
+                padding: 12,
+                borderRadius: T2.radii.md,
+                background: pal.terracottaL,
+                color: pal.terracottaD,
+                fontFamily: 'Inter, sans-serif',
+                fontSize: 12,
+                marginBottom: 16,
+              }}>
+                {joinError}
+              </div>
+            )}
+
+            <PrimaryButton
+              vibe={vibe}
+              tone="terracotta"
+              onClick={handleJoin}
+              disabled={!name.trim() || joining}
+            >
+              {joining ? 'Joining…' : `Join ${preview.name} →`}
+            </PrimaryButton>
+          </>
+        )}
+      </div>
+    </ScreenShell>
+  );
+}
+
 function AuthScreen({ vibe, onContinue }) {
   const pal = T2.palette;
   const [email, setEmail] = useState('');
@@ -379,8 +549,34 @@ function AuthScreen({ vibe, onContinue }) {
 // ─────────────────────────────────────────────────────────────
 // 2. Home — list of groups
 // ─────────────────────────────────────────────────────────────
-function HomeScreen({ vibe, onOpenGroup, onCreate, onProfile }) {
+function HomeScreen({ vibe, currentGroup, onOpenGroup, onCreate, onProfile }) {
   const pal = T2.palette;
+  const [groups, setGroups] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  // Fetch the user's real groups from the backend on mount and whenever
+  // currentGroup changes (creating / joining one bumps the list). Failures
+  // fall back to "no groups yet" rather than blocking the screen.
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    window.PLOT_API.listMyGroups()
+      .then((res) => { if (!cancelled) { setGroups(res.groups || []); setLoading(false); } })
+      .catch((e) => { if (!cancelled) { setError(String(e.message || e)); setLoading(false); } });
+    return () => { cancelled = true; };
+  }, [currentGroup && currentGroup.id]);
+
+  function handleOpen(g) {
+    // Set this as the active group and route into the prefs flow.
+    onOpenGroup({
+      id: g.id,
+      name: g.name,
+      invite_token: g.invite_token,
+      my_display_name: window.PLOT_API.getDisplayName() || 'You',
+    });
+  }
 
   return (
     <ScreenShell vibe={vibe} bg={pal.cream} padTop={50}>
@@ -400,64 +596,103 @@ function HomeScreen({ vibe, onOpenGroup, onCreate, onProfile }) {
             border: `1.5px solid ${pal.terracotta}`,
             fontFamily: 'Inter, sans-serif', fontSize: 14, fontWeight: 600,
             cursor: 'pointer',
-          }}>Y</button>
+          }}>{(window.PLOT_API.getDisplayName() || 'Y').slice(0, 1).toUpperCase()}</button>
       </div>
 
       <div style={{ padding: '0 24px' }}>
         <SectionLabel vibe={vibe}>Your groups</SectionLabel>
 
+        {loading && (
+          <div style={{
+            padding: 24, textAlign: 'center',
+            fontFamily: 'Inter, sans-serif', fontSize: 13, color: pal.inkSoft,
+          }}>Loading groups…</div>
+        )}
+
+        {!loading && error && (
+          <div style={{
+            padding: 16, borderRadius: T2.radii.md,
+            background: pal.terracottaL, color: pal.terracottaD,
+            fontFamily: 'Inter, sans-serif', fontSize: 12,
+            marginBottom: 12,
+          }}>
+            Couldn't load your groups — {error}
+          </div>
+        )}
+
+        {!loading && !error && groups.length === 0 && (
+          <div style={{
+            padding: 24,
+            borderRadius: T2.radii.md,
+            background: pal.creamSoft,
+            border: `1px dashed ${pal.line}`,
+            color: pal.inkSoft,
+            fontFamily: 'Inter, sans-serif', fontSize: 13,
+            textAlign: 'center',
+            marginBottom: 12,
+          }}>
+            No groups yet. Tap "New group" to create one and share the link with friends.
+          </div>
+        )}
+
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {SAMPLE_GROUPS.map((g) => (
-            <button
-              key={g.id}
-              onClick={() => onOpenGroup(g.id)}
-              style={{
-                textAlign: 'left',
-                padding: '16px',
-                background: pal.creamSoft,
-                border: `1px solid ${pal.line}`,
-                borderRadius: vibe === 'playful' ? T2.radii.lg : T2.radii.lg,
-                cursor: 'pointer',
-                boxShadow: vibe === 'playful' ? `3px 3px 0 ${pal.ink}` : 'none',
-                transform: vibe === 'playful' ? 'rotate(-0.2deg)' : 'none',
-                fontFamily: 'inherit',
-                width: '100%',
-              }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
-                <div style={{
-                  fontFamily: 'Inter, sans-serif',
-                  fontSize: 19, fontWeight: 500,
-                  letterSpacing: '-0.01em', color: pal.ink,
-                }}>{g.name}</div>
-                <div style={{
-                  padding: '3px 8px',
-                  borderRadius: T2.radii.pill,
-                  background: g.status === 'locked' ? pal.sageL : g.status === 'voting' ? pal.peachL : pal.lilacL,
-                  color:      g.status === 'locked' ? pal.sageD : g.status === 'voting' ? '#9A7320'  : pal.lilacD,
-                  fontFamily: '"JetBrains Mono", monospace',
-                  fontSize: 9, fontWeight: 600,
-                  letterSpacing: '0.06em', textTransform: 'uppercase',
+          {groups.map((g) => {
+            const isActive = currentGroup && currentGroup.id === g.id;
+            return (
+              <button
+                key={g.id}
+                onClick={() => handleOpen(g)}
+                style={{
+                  textAlign: 'left',
+                  padding: '16px',
+                  background: isActive ? pal.terracottaL : pal.creamSoft,
+                  border: `1px solid ${isActive ? pal.terracotta : pal.line}`,
+                  borderRadius: T2.radii.lg,
+                  cursor: 'pointer',
+                  boxShadow: vibe === 'playful' ? `3px 3px 0 ${pal.ink}` : 'none',
+                  transform: vibe === 'playful' ? 'rotate(-0.2deg)' : 'none',
+                  fontFamily: 'inherit',
+                  width: '100%',
                 }}>
-                  {g.status}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+                  <div style={{
+                    fontFamily: 'Inter, sans-serif',
+                    fontSize: 19, fontWeight: 500,
+                    letterSpacing: '-0.01em', color: pal.ink,
+                  }}>{g.name}</div>
+                  {isActive && (
+                    <div style={{
+                      padding: '3px 8px',
+                      borderRadius: T2.radii.pill,
+                      background: pal.terracotta,
+                      color: pal.cream,
+                      fontFamily: '"JetBrains Mono", monospace',
+                      fontSize: 9, fontWeight: 600,
+                      letterSpacing: '0.06em', textTransform: 'uppercase',
+                    }}>active</div>
+                  )}
                 </div>
-              </div>
-              {/* member dots */}
-              <div style={{ display: 'flex', gap: -8, marginBottom: 8 }}>
-                {Array.from({ length: g.members }).map((_, i) => (
-                  <div key={i} style={{
-                    width: 22, height: 22, borderRadius: T2.radii.pill,
-                    background: ['terracottaL','sageL','lilacL','peachL'].map(k => pal[k])[i % 4],
-                    border: `1.5px solid ${pal.cream}`,
-                    marginLeft: i === 0 ? 0 : -6,
-                  }} />
-                ))}
-              </div>
-              <div style={{
-                fontFamily: 'Inter, sans-serif', fontSize: 12,
-                color: pal.inkSoft,
-              }}>{g.last}</div>
-            </button>
-          ))}
+                {/* member dots */}
+                <div style={{ display: 'flex', marginBottom: 8 }}>
+                  {Array.from({ length: Math.min(g.member_count || 1, 6) }).map((_, i) => (
+                    <div key={i} style={{
+                      width: 22, height: 22, borderRadius: T2.radii.pill,
+                      background: ['terracottaL','sageL','lilacL','peachL'].map(k => pal[k])[i % 4],
+                      border: `1.5px solid ${pal.cream}`,
+                      marginLeft: i === 0 ? 0 : -6,
+                    }} />
+                  ))}
+                </div>
+                <div style={{
+                  fontFamily: 'Inter, sans-serif', fontSize: 12,
+                  color: pal.inkSoft,
+                }}>
+                  {g.member_count} member{g.member_count === 1 ? '' : 's'}
+                  {g.last_rec_id ? ' · planning a hangout' : ' · no recs yet'}
+                </div>
+              </button>
+            );
+          })}
         </div>
 
         {/* Create CTA */}
@@ -488,9 +723,79 @@ function HomeScreen({ vibe, onOpenGroup, onCreate, onProfile }) {
 // ─────────────────────────────────────────────────────────────
 function CreateGroupScreen({ vibe, onBack, onCreated }) {
   const pal = T2.palette;
-  const [name, setName] = useState('Sunday Soft Life');
+  const [name, setName] = useState('');
+  const [displayName, setDisplayName] = useState(() => window.PLOT_API.getDisplayName());
+  const [creating, setCreating] = useState(false);
+  const [created, setCreated] = useState(null);   // {id, name, invite_token}
+  const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
-  const link = `plot.app/g/${name.toLowerCase().replace(/\s+/g, '-').slice(0, 14)}-${Math.floor(Math.random() * 9000 + 1000)}`;
+
+  // Build the public share URL from the invite_token. We point at this
+  // exact deployed UI (whatever origin the user is on right now) so the
+  // link works regardless of which Cloud Run revision is live.
+  const shareUrl = created
+    ? `${window.location.origin}${window.location.pathname}?join=${encodeURIComponent(created.invite_token)}`
+    : '';
+
+  async function handleCreate() {
+    if (!name.trim() || !displayName.trim() || creating) return;
+    setCreating(true);
+    setError(null);
+    const trimmedName = name.trim();
+    const trimmedDisplay = displayName.trim();
+    window.PLOT_API.setDisplayName(trimmedDisplay);
+    try {
+      const g = await window.PLOT_API.createGroup(trimmedName, trimmedDisplay);
+      setCreated(g);
+    } catch (err) {
+      setError(String(err.message || err));
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function handleCopy() {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+    } catch (e) {
+      // clipboard API blocked — fall back to a temp textarea
+      const ta = document.createElement('textarea');
+      ta.value = shareUrl;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch (e2) { /* give up */ }
+      document.body.removeChild(ta);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+
+  // Native share sheet (iOS/Android). Falls back to copy if unavailable.
+  async function handleShare() {
+    if (!shareUrl) return;
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `Join ${created.name} on Plot`,
+          text: `${displayName} invited you to plan a hangout.`,
+          url: shareUrl,
+        });
+      } catch (e) { /* user cancelled — no-op */ }
+    } else {
+      handleCopy();
+    }
+  }
+
+  function handleContinue() {
+    if (!created) return;
+    onCreated({
+      id: created.id,
+      name: created.name,
+      invite_token: created.invite_token,
+      my_display_name: displayName.trim(),
+    });
+  }
 
   return (
     <ScreenShell vibe={vibe} bg={pal.cream} padTop={50}>
@@ -499,88 +804,169 @@ function CreateGroupScreen({ vibe, onBack, onCreated }) {
           background: 'transparent', border: 'none', cursor: 'pointer',
           padding: 4, color: pal.ink, fontSize: 22, fontFamily: 'inherit',
         }}>←</button>
-        <SectionLabel vibe={vibe}>New group</SectionLabel>
+        <SectionLabel vibe={vibe}>{created ? 'Group ready' : 'New group'}</SectionLabel>
       </div>
 
       <div style={{ padding: '0 24px' }}>
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Group name"
-          style={{
-            width: '100%',
-            padding: '14px 0 8px',
-            background: 'transparent',
-            border: 'none',
-            borderBottom: `1.5px solid ${pal.line}`,
-            fontFamily: 'Inter, sans-serif',
-            fontSize: 28, fontWeight: 500,
-            letterSpacing: '-0.02em', color: pal.ink,
-            outline: 'none',
-            marginBottom: 28,
-            boxSizing: 'border-box',
-          }}
-        />
+        {!created ? (
+          <>
+            <div style={{
+              fontFamily: 'Inter, sans-serif',
+              fontSize: 12, fontWeight: 600,
+              color: pal.inkMute,
+              letterSpacing: '0.06em',
+              textTransform: 'uppercase',
+              marginBottom: 6,
+            }}>group name</div>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Sunday Soft Life"
+              autoFocus
+              maxLength={80}
+              style={{
+                width: '100%',
+                padding: '12px 0 8px',
+                background: 'transparent',
+                border: 'none',
+                borderBottom: `1.5px solid ${pal.line}`,
+                fontFamily: 'Inter, sans-serif',
+                fontSize: 26, fontWeight: 500,
+                letterSpacing: '-0.02em', color: pal.ink,
+                outline: 'none',
+                marginBottom: 24,
+                boxSizing: 'border-box',
+              }}
+            />
 
-        <SectionLabel vibe={vibe}>Share link</SectionLabel>
-        <div style={{
-          padding: 14,
-          borderRadius: T2.radii.lg,
-          background: pal.creamSoft,
-          border: `1.5px solid ${pal.line}`,
-          marginBottom: 24,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 8,
-          transform: vibe === 'playful' ? 'rotate(-0.4deg)' : 'none',
-          boxShadow: vibe === 'playful' ? `3px 3px 0 ${pal.ink}` : 'none',
-        }}>
-          <div style={{
-            fontFamily: '"JetBrains Mono", monospace',
-            fontSize: 13,
-            color: pal.ink,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          }}>{link}</div>
-          <button
-            onClick={() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }}
-            style={{
-              padding: '6px 12px',
-              borderRadius: T2.radii.pill,
-              border: `1.5px solid ${pal.ink}`,
-              background: copied ? pal.sage : pal.cream,
-              color: copied ? pal.cream : pal.ink,
-              fontFamily: 'Inter, sans-serif', fontSize: 12, fontWeight: 600,
-              cursor: 'pointer', flexShrink: 0,
-            }}>{copied ? '✓ copied' : 'copy'}</button>
-        </div>
+            <div style={{
+              fontFamily: 'Inter, sans-serif',
+              fontSize: 12, fontWeight: 600,
+              color: pal.inkMute,
+              letterSpacing: '0.06em',
+              textTransform: 'uppercase',
+              marginBottom: 6,
+            }}>your name</div>
+            <input
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              placeholder="Sai"
+              maxLength={40}
+              style={{
+                width: '100%',
+                padding: '10px 0',
+                background: 'transparent',
+                border: 'none',
+                borderBottom: `1.5px solid ${pal.line}`,
+                fontFamily: 'Inter, sans-serif',
+                fontSize: 18, fontWeight: 500,
+                color: pal.ink,
+                outline: 'none',
+                marginBottom: 24,
+                boxSizing: 'border-box',
+              }}
+            />
 
-        <SectionLabel vibe={vibe}>Members · 1 of 8</SectionLabel>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <Avatar name="You" color="terracotta" vibe={vibe} />
-            <div>
-              <div style={{ fontFamily: 'Inter, sans-serif', fontSize: 15, fontWeight: 500, color: pal.ink }}>You</div>
-              <div style={{ fontFamily: 'Inter, sans-serif', fontSize: 12, color: pal.inkMute }}>creator</div>
+            {error && (
+              <div style={{
+                padding: 12,
+                borderRadius: T2.radii.md,
+                background: pal.terracottaL,
+                color: pal.terracottaD,
+                fontFamily: 'Inter, sans-serif',
+                fontSize: 12,
+                marginBottom: 16,
+              }}>
+                {error}
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <div style={{
+              fontFamily: 'Inter, sans-serif',
+              fontSize: 28, fontWeight: 500,
+              letterSpacing: '-0.02em',
+              color: pal.ink,
+              lineHeight: 1.1,
+              marginBottom: 6,
+            }}>
+              {created.name}
             </div>
-          </div>
-          <div style={{
-            padding: 14,
-            border: `1.5px dashed ${pal.line}`,
-            borderRadius: T2.radii.md,
-            color: pal.inkMute,
-            fontFamily: 'Inter, sans-serif', fontSize: 13,
-            textAlign: 'center',
-          }}>
-            Send the link — friends join automatically.
-          </div>
-        </div>
+            <div style={{
+              fontFamily: 'Inter, sans-serif',
+              fontSize: 13, color: pal.inkSoft, marginBottom: 22,
+            }}>
+              Send this link to your friends. They open it on their phones, type their name, join.
+            </div>
+
+            <SectionLabel vibe={vibe}>Share link</SectionLabel>
+            <div style={{
+              padding: 14,
+              borderRadius: T2.radii.lg,
+              background: pal.creamSoft,
+              border: `1.5px solid ${pal.line}`,
+              marginBottom: 14,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+              transform: vibe === 'playful' ? 'rotate(-0.4deg)' : 'none',
+              boxShadow: vibe === 'playful' ? `3px 3px 0 ${pal.ink}` : 'none',
+            }}>
+              <div style={{
+                fontFamily: '"JetBrains Mono", monospace',
+                fontSize: 11,
+                color: pal.ink,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                flex: 1,
+              }}>{shareUrl}</div>
+              <button
+                onClick={handleCopy}
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: T2.radii.pill,
+                  border: `1.5px solid ${pal.ink}`,
+                  background: copied ? pal.sage : pal.cream,
+                  color: copied ? pal.cream : pal.ink,
+                  fontFamily: 'Inter, sans-serif', fontSize: 12, fontWeight: 600,
+                  cursor: 'pointer', flexShrink: 0,
+                }}>{copied ? '✓ copied' : 'copy'}</button>
+            </div>
+
+            <button
+              onClick={handleShare}
+              style={{
+                width: '100%',
+                padding: '12px 0',
+                marginBottom: 24,
+                borderRadius: T2.radii.pill,
+                border: `1.5px solid ${pal.ink}`,
+                background: pal.ink,
+                color: pal.cream,
+                fontFamily: 'Inter, sans-serif',
+                fontSize: 14, fontWeight: 600,
+                cursor: 'pointer',
+              }}>Share via… (Messages, WhatsApp)</button>
+          </>
+        )}
       </div>
 
       <div style={{ padding: '24px 24px 0' }}>
-        <PrimaryButton vibe={vibe} tone="terracotta" onClick={onCreated}>
-          Continue →
-        </PrimaryButton>
+        {!created ? (
+          <PrimaryButton
+            vibe={vibe}
+            tone="terracotta"
+            onClick={handleCreate}
+            disabled={!name.trim() || !displayName.trim() || creating}
+          >
+            {creating ? 'Creating…' : 'Create group →'}
+          </PrimaryButton>
+        ) : (
+          <PrimaryButton vibe={vibe} tone="terracotta" onClick={handleContinue}>
+            Continue — set my prefs →
+          </PrimaryButton>
+        )}
       </div>
     </ScreenShell>
   );
@@ -589,7 +975,7 @@ function CreateGroupScreen({ vibe, onBack, onCreated }) {
 // ─────────────────────────────────────────────────────────────
 // 4. Set My Prefs (the killer screen)
 // ─────────────────────────────────────────────────────────────
-function SetPrefsScreen({ vibe, iconStyle, density, onBack, onSubmit }) {
+function SetPrefsScreen({ vibe, iconStyle, density, currentGroup, onBack, onSubmit }) {
   const pal = T2.palette;
   const [selected, setSelected] = useState(['food', 'outdoors', 'arts']);
   const [budget, setBudget] = useState(2);
@@ -657,7 +1043,9 @@ function SetPrefsScreen({ vibe, iconStyle, density, onBack, onSubmit }) {
           background: 'transparent', border: 'none', cursor: 'pointer',
           padding: 4, color: pal.ink, fontSize: 22, fontFamily: 'inherit',
         }}>←</button>
-        <SectionLabel vibe={vibe}>Sunday Soft Life · your prefs</SectionLabel>
+        <SectionLabel vibe={vibe}>
+          {currentGroup ? `${currentGroup.name} · your prefs` : 'Solo · your prefs'}
+        </SectionLabel>
       </div>
 
       <div style={{ padding: '0 24px' }}>
@@ -787,7 +1175,7 @@ function adaptEvent(e) {
   };
 }
 
-function RecsScreen({ vibe, density, onBack, onLockedIn, votes, setVotes, recState, onShuffle }) {
+function RecsScreen({ vibe, density, currentGroup, onBack, onLockedIn, votes, setVotes, recState, onShuffle }) {
   const pal = T2.palette;
   const [tab, setTab] = useState('places');
 
@@ -805,9 +1193,14 @@ function RecsScreen({ vibe, density, onBack, onLockedIn, votes, setVotes, recSta
 
   const setVote = (id, vote) => {
     setVotes((prev) => ({ ...prev, [id]: prev[id] === vote ? null : vote }));
-    // Fire /feedback in the background. Failures are non-fatal — the vote
-    // still updates locally even if the network drops.
-    if (recState?.rec_id && vote) {
+    if (!vote) return;
+    // Fire the vote in the background. Failures are non-fatal — the vote
+    // still updates locally even if the network drops. In group mode we
+    // route through /groups/{id}/vote so other members' phones see it on
+    // their next poll; solo mode keeps the existing /feedback behavior.
+    if (currentGroup && currentGroup.id) {
+      window.PLOT_API.groupVote(currentGroup.id, id, vote).catch(() => {});
+    } else if (recState?.rec_id) {
       window.PLOT_API.feedback(recState.rec_id, id, vote).catch(() => {});
     }
   };
@@ -1500,11 +1893,12 @@ function MemoriesScreen({ vibe, onBack }) {
 // ─────────────────────────────────────────────────────────────
 // 8. Profile
 // ─────────────────────────────────────────────────────────────
-function ProfileScreen({ vibe, iconStyle, onBack }) {
+function ProfileScreen({ vibe, iconStyle, currentGroup, onLeaveGroup, onBack }) {
   const pal = T2.palette;
   const [defaults, setDefaults] = useState(['food', 'outdoors', 'arts', 'wellness']);
   const [budget, setBudget] = useState(2);
   const [distance, setDistance] = useState(5);
+  const displayName = window.PLOT_API.getDisplayName() || 'You';
 
   const toggle = (id) => setDefaults((s) => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
 
@@ -1519,19 +1913,69 @@ function ProfileScreen({ vibe, iconStyle, onBack }) {
       </div>
 
       <div style={{ padding: '0 24px' }}>
-        {/* Avatar + name */}
+        {/* Avatar + name — display name pulled from localStorage. The
+            "email" line shows a short device id so users have some sense
+            of which account this phone is signed into during testing. */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 28 }}>
-          <Avatar name="You" color="terracotta" size={64} vibe={vibe} />
+          <Avatar name={displayName} color="terracotta" size={64} vibe={vibe} />
           <div>
             <div style={{
               fontFamily: 'Inter, sans-serif',
               fontSize: 22, fontWeight: 500,
               letterSpacing: '-0.01em',
               color: pal.ink,
-            }}>Maya R.</div>
-            <div style={{ fontFamily: 'Inter, sans-serif', fontSize: 13, color: pal.inkSoft }}>maya@gmail.com</div>
+            }}>{displayName}</div>
+            <div style={{ fontFamily: '"JetBrains Mono", monospace', fontSize: 11, color: pal.inkSoft }}>
+              {window.PLOT_API.getUserId()}
+            </div>
           </div>
         </div>
+
+        {/* Active group indicator + leave-group button. Visible only when
+            the user is currently in a group; tapping leave drops them
+            back to solo mode (the group still exists for other members). */}
+        {currentGroup && (
+          <div style={{
+            padding: 14,
+            borderRadius: T2.radii.lg,
+            background: pal.terracottaL,
+            border: `1.5px solid ${pal.terracotta}`,
+            marginBottom: 28,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+          }}>
+            <div>
+              <div style={{
+                fontFamily: '"JetBrains Mono", monospace',
+                fontSize: 9, fontWeight: 600,
+                letterSpacing: '0.08em',
+                textTransform: 'uppercase',
+                color: pal.terracottaD,
+                marginBottom: 4,
+              }}>active group</div>
+              <div style={{
+                fontFamily: 'Inter, sans-serif',
+                fontSize: 16, fontWeight: 500,
+                color: pal.ink,
+              }}>{currentGroup.name}</div>
+            </div>
+            <button
+              onClick={onLeaveGroup}
+              style={{
+                padding: '8px 14px',
+                borderRadius: T2.radii.pill,
+                border: `1.5px solid ${pal.ink}`,
+                background: pal.cream,
+                color: pal.ink,
+                fontFamily: 'Inter, sans-serif',
+                fontSize: 12, fontWeight: 600,
+                cursor: 'pointer',
+                flexShrink: 0,
+              }}>Leave</button>
+          </div>
+        )}
 
         <SectionLabel vibe={vibe}>Default categories</SectionLabel>
         <div style={{
@@ -1570,7 +2014,7 @@ function ProfileScreen({ vibe, iconStyle, onBack }) {
 
 // Export
 Object.assign(window, {
-  AuthScreen, HomeScreen, CreateGroupScreen,
+  AuthScreen, JoinGroupScreen, HomeScreen, CreateGroupScreen,
   SetPrefsScreen, RecsScreen, GroupDecisionScreen,
   MemoriesScreen, ProfileScreen,
 });

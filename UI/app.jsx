@@ -10,6 +10,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 
 const SCREENS = [
   { id: 'auth',     label: 'Auth' },
+  { id: 'join',     label: 'Join group' },
   { id: 'home',     label: 'Home' },
   { id: 'create',   label: 'Create group' },
   { id: 'prefs',    label: 'Set prefs' },
@@ -21,8 +22,31 @@ const SCREENS = [
 
 function PlotApp() {
   const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
-  const [screen, setScreen] = useState('prefs'); // open on the killer screen first
+  // Boot screen depends on URL state — see initial-screen logic below.
+  const [screen, setScreen] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('join')) return 'join';
+    return window.PLOT_API.getCurrentGroup() ? 'home' : 'prefs';
+  });
   const [votes, setVotes] = useState({});
+
+  // The active group, if the user is planning with friends. Persists in
+  // localStorage so a refresh keeps the user in the group instead of
+  // dropping them back to solo. Shape: {id, name, invite_token,
+  // my_display_name}.
+  const [currentGroup, _setCurrentGroup] = useState(() => window.PLOT_API.getCurrentGroup());
+  function setCurrentGroup(g) {
+    _setCurrentGroup(g);
+    if (g) window.PLOT_API.setCurrentGroup(g);
+    else window.PLOT_API.clearCurrentGroup();
+  }
+
+  // Pending invite token from the URL (?join=...), captured on first mount
+  // so we can fetch the group preview lazily once JoinGroupScreen renders.
+  const [pendingInviteToken] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('join') || null;
+  });
 
   // App-level state shared across screens. Filled in by SetPrefs on submit
   // and consumed by Recs / Group Decision. No backend persistence yet —
@@ -47,8 +71,12 @@ function PlotApp() {
   const RECS_VISIBLE = 5;
 
   // Submit handler — called by SetPrefsScreen with the user's chosen prefs.
-  // Fires /recommend and /events in parallel so the user only waits for
-  // the slower of the two (LLM rerank ~800ms, BQ ~300ms).
+  // Two paths:
+  //   * SOLO  → POST /recommend directly with this user's prefs
+  //   * GROUP → POST /groups/{id}/prefs (save my prefs), then POST
+  //             /groups/{id}/recommend (server merges all members' prefs).
+  // Both paths shape recState identically so the rest of the UI doesn't
+  // care which mode it's in.
   async function handleSubmitPrefs(prefs) {
     setRecState({
       loading: true, error: null, venues: [], events: [],
@@ -59,10 +87,23 @@ function PlotApp() {
     setScreen('recs');
     setVotes({});
     try {
-      const [recRes, eventRes] = await Promise.all([
-        window.PLOT_API.recommend(prefs, RECS_POOL_SIZE).catch((e) => ({ _err: e })),
-        window.PLOT_API.events(prefs, RECS_POOL_SIZE).catch(() => ({ events: [] })),
-      ]);
+      let recRes, eventRes;
+      if (currentGroup && currentGroup.id) {
+        // Group mode: save my prefs to the group, then ask the server to
+        // merge all members' prefs and rank. We still call /events
+        // separately because group recs don't include events.
+        await window.PLOT_API.setGroupPrefs(currentGroup.id, prefs);
+        [recRes, eventRes] = await Promise.all([
+          window.PLOT_API.groupRecommend(currentGroup.id, RECS_POOL_SIZE).catch((e) => ({ _err: e })),
+          window.PLOT_API.events(prefs, RECS_POOL_SIZE).catch(() => ({ events: [] })),
+        ]);
+      } else {
+        // Solo mode (unchanged behavior)
+        [recRes, eventRes] = await Promise.all([
+          window.PLOT_API.recommend(prefs, RECS_POOL_SIZE).catch((e) => ({ _err: e })),
+          window.PLOT_API.events(prefs, RECS_POOL_SIZE).catch(() => ({ events: [] })),
+        ]);
+      }
       if (recRes && recRes._err) throw recRes._err;
       setRecState((s) => ({
         ...s,
@@ -77,6 +118,33 @@ function PlotApp() {
     } catch (err) {
       setRecState((s) => ({ ...s, loading: false, error: String(err.message || err) }));
     }
+  }
+
+  // After a successful join (from JoinGroupScreen) — set context and
+  // route the user into the prefs flow so they can contribute their
+  // preferences to the group.
+  function handleJoinedGroup(group) {
+    setCurrentGroup(group);
+    // Strip ?join=… from the URL so a refresh doesn't re-trigger the
+    // join landing.
+    if (window.history && window.history.replaceState) {
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+    setScreen('prefs');
+  }
+
+  // CreateGroupScreen → API → set context → land on prefs.
+  function handleCreatedGroup(group) {
+    setCurrentGroup(group);
+    setScreen('prefs');
+  }
+
+  // Profile / Home → "leave group" returns to solo mode. We don't delete
+  // the group server-side (other members keep planning); just clear our
+  // local context.
+  function handleLeaveGroup() {
+    setCurrentGroup(null);
+    setScreen('home');
   }
 
   // "We went" tap on Group Decision: log the strongest feedback signal
@@ -132,13 +200,14 @@ function PlotApp() {
     const props = { vibe: tweaks.vibe, iconStyle: tweaks.iconStyle, density: tweaks.density };
     switch (screen) {
       case 'auth':     return <AuthScreen {...props} onContinue={() => setScreen('home')} />;
-      case 'home':     return <HomeScreen {...props} onOpenGroup={() => setScreen('prefs')} onCreate={() => setScreen('create')} onProfile={() => setScreen('profile')} />;
-      case 'create':   return <CreateGroupScreen {...props} onBack={() => setScreen('home')} onCreated={() => setScreen('prefs')} />;
-      case 'prefs':    return <SetPrefsScreen {...props} onBack={() => setScreen('home')} onSubmit={handleSubmitPrefs} />;
-      case 'recs':     return <RecsScreen {...props} recState={recState} votes={votes} setVotes={setVotes} onShuffle={handleShuffle} onBack={() => setScreen('prefs')} onLockedIn={() => setScreen('decision')} />;
-      case 'decision': return <GroupDecisionScreen {...props} recState={recState} votes={votes} onBack={() => setScreen('recs')} onMemories={() => setScreen('memories')} onWentThere={handleWentThere} />;
+      case 'join':     return <JoinGroupScreen {...props} token={pendingInviteToken} onBack={() => setScreen('home')} onJoined={handleJoinedGroup} />;
+      case 'home':     return <HomeScreen {...props} currentGroup={currentGroup} onOpenGroup={() => setScreen('prefs')} onCreate={() => setScreen('create')} onProfile={() => setScreen('profile')} />;
+      case 'create':   return <CreateGroupScreen {...props} onBack={() => setScreen('home')} onCreated={handleCreatedGroup} />;
+      case 'prefs':    return <SetPrefsScreen {...props} currentGroup={currentGroup} onBack={() => setScreen('home')} onSubmit={handleSubmitPrefs} />;
+      case 'recs':     return <RecsScreen {...props} currentGroup={currentGroup} recState={recState} votes={votes} setVotes={setVotes} onShuffle={handleShuffle} onBack={() => setScreen('prefs')} onLockedIn={() => setScreen('decision')} />;
+      case 'decision': return <GroupDecisionScreen {...props} currentGroup={currentGroup} recState={recState} votes={votes} onBack={() => setScreen('recs')} onMemories={() => setScreen('memories')} onWentThere={handleWentThere} />;
       case 'memories': return <MemoriesScreen {...props} onBack={() => setScreen('decision')} />;
-      case 'profile':  return <ProfileScreen {...props} onBack={() => setScreen('home')} />;
+      case 'profile':  return <ProfileScreen {...props} currentGroup={currentGroup} onLeaveGroup={handleLeaveGroup} onBack={() => setScreen('home')} />;
       default: return null;
     }
   })();
