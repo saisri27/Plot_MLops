@@ -17,6 +17,13 @@ Pick the top {top_k} venues for THIS group. For each pick, write one sentence
 explaining why it fits this specific group's preferences (mention budget,
 group size, category fit, or what makes it distinctive).
 
+Group fairness rule: when category_weights includes more than one category
+with non-zero weight, your top picks MUST include at least one venue from
+each represented category — so every group member sees their interest
+reflected. Do not pick all your venues from the most popular category.
+If you can't find a candidate for a represented category, pick the closest
+available alternative rather than skipping it.
+
 You MUST only pick venues from the candidate list above. Use exact names.
 
 Output JSON (and nothing else):

@@ -256,7 +256,7 @@ function JoinGroupScreen({ vibe, token, onBack, onJoined }) {
               fontFamily: 'Inter, sans-serif',
               fontSize: 14, color: pal.inkSoft, marginBottom: 28,
             }}>
-              {preview.member_count} member{preview.member_count === 1 ? '' : 's'} so far · pick a place together
+              {preview.member_count} {preview.member_count === 1 ? 'person' : 'people'} in so far · come pick a spot
             </div>
 
             <div style={{
@@ -316,6 +316,243 @@ function JoinGroupScreen({ vibe, token, onBack, onJoined }) {
       </div>
     </ScreenShell>
   );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Waiting Room — group lobby. Polls group state via the parent's effect,
+// shows who's set their prefs vs who's still picking, and exposes the
+// "Get our recs" CTA. The copy is intentionally friend-group casual,
+// not corporate.
+// ─────────────────────────────────────────────────────────────
+function WaitingRoomScreen({ vibe, currentGroup, lobbyState, onTriggerRecs, onBack, loading }) {
+  const pal = T2.palette;
+  const [copied, setCopied] = useState(false);
+
+  const members = (lobbyState && lobbyState.members) || [];
+  const ready = members.filter((m) => m.prefs && m.prefs.categories && m.prefs.categories.length);
+  const stillPicking = members.filter((m) => !m.prefs || !m.prefs.categories || !m.prefs.categories.length);
+  const allReady = members.length > 0 && stillPicking.length === 0;
+  const enoughReady = ready.length >= 1;
+  const myUserId = window.PLOT_API.getUserId();
+
+  // Adaptive header — different copy depending on lobby state.
+  // Order matters: most specific case first.
+  let headline = 'Lobby';
+  let subline = 'Send the link if you haven\'t already.';
+  if (members.length === 0) {
+    headline = 'Group\'s quiet…';
+    subline = 'Send the link to the crew.';
+  } else if (members.length === 1 && ready.length === 1 && ready[0].user_id === myUserId) {
+    headline = 'You\'re first in.';
+    subline = 'Where is everyone?';
+  } else if (allReady && ready.length === 1) {
+    headline = 'All set.';
+    subline = 'You\'re solo for now — fire it up or wait for the gang.';
+  } else if (allReady) {
+    headline = 'Everyone\'s in.';
+    subline = 'Pick a spot together.';
+  } else if (stillPicking.length === 1) {
+    const name = stillPicking[0].display_name || 'them';
+    headline = `Just waiting on ${name}…`;
+    subline = `(always the last one)`;
+  } else if (stillPicking.length > 1) {
+    headline = `${stillPicking.length} more to pick.`;
+    subline = "Send 'em a poke.";
+  }
+
+  const shareUrl = currentGroup
+    ? `${window.location.origin}${window.location.pathname}?join=${encodeURIComponent(currentGroup.invite_token)}`
+    : '';
+
+  async function handleCopy() {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+    } catch (e) { /* ignore */ }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+
+  async function handleShare() {
+    if (!shareUrl) return;
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `Join ${currentGroup.name} on Plot`,
+          text: 'come pick a spot with us',
+          url: shareUrl,
+        });
+      } catch (e) { /* user cancelled */ }
+    } else {
+      handleCopy();
+    }
+  }
+
+  return (
+    <ScreenShell
+      vibe={vibe}
+      bg={pal.cream}
+      padTop={50}
+      padBottom={enoughReady ? 100 : 40}
+      footer={enoughReady ? (
+        <PrimaryButton
+          vibe={vibe}
+          tone={allReady ? 'terracotta' : 'ink'}
+          onClick={onTriggerRecs}
+          disabled={loading}
+        >
+          {loading
+            ? 'Asking the LLM…'
+            : allReady
+              ? 'Get our recs →'
+              : `Pick anyway · ${ready.length} ready →`}
+        </PrimaryButton>
+      ) : null}
+    >
+      <div style={{ padding: '8px 24px 0', display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+        <button onClick={onBack} style={{
+          background: 'transparent', border: 'none', cursor: 'pointer',
+          padding: 4, color: pal.ink, fontSize: 22, fontFamily: 'inherit',
+        }}>←</button>
+        <SectionLabel vibe={vibe}>{currentGroup ? currentGroup.name : 'Lobby'}</SectionLabel>
+      </div>
+
+      <div style={{ padding: '0 24px' }}>
+        <div style={{
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 32, fontWeight: 500,
+          letterSpacing: '-0.02em',
+          color: pal.ink,
+          lineHeight: 1.1,
+          textWrap: 'pretty',
+          marginBottom: 6,
+        }}>
+          {headline}
+        </div>
+        <div style={{
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 14, color: pal.inkSoft,
+          marginBottom: 28,
+        }}>
+          {subline}
+        </div>
+
+        {/* Member list — ready members with a green dot, still-picking with a pulsing one */}
+        {members.length > 0 && (
+          <>
+            <SectionLabel vibe={vibe}>{members.length} in the group</SectionLabel>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 24 }}>
+              {members.map((m) => {
+                const isReady = m.prefs && m.prefs.categories && m.prefs.categories.length;
+                const isYou = m.user_id === myUserId;
+                const colors = ['terracotta', 'sage', 'lilac', 'peach'];
+                const color = colors[Math.abs(_hashStr(m.user_id)) % colors.length];
+                return (
+                  <div key={m.user_id} style={{
+                    display: 'flex', alignItems: 'center', gap: 12,
+                    padding: '10px 14px',
+                    borderRadius: T2.radii.md,
+                    background: isReady ? pal.sageL : pal.creamSoft,
+                    border: `1px solid ${isReady ? pal.sage : pal.line}`,
+                  }}>
+                    <Avatar name={m.display_name} color={color} size={36} vibe={vibe} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{
+                        fontFamily: 'Inter, sans-serif',
+                        fontSize: 15, fontWeight: 500,
+                        color: pal.ink,
+                      }}>{m.display_name}{isYou ? ' (you)' : ''}</div>
+                      <div style={{
+                        fontFamily: 'Inter, sans-serif',
+                        fontSize: 12,
+                        color: isReady ? pal.sageD : pal.inkMute,
+                      }}>
+                        {isReady ? 'ready' : 'still picking…'}
+                      </div>
+                    </div>
+                    <div style={{
+                      width: 10, height: 10, borderRadius: '50%',
+                      background: isReady ? pal.sageD : pal.peachD,
+                      animation: isReady ? 'none' : 'plotpulse 1.6s ease-in-out infinite',
+                    }} />
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+
+        {/* Share-link reminder so people can keep adding friends from the lobby */}
+        {currentGroup && (
+          <>
+            <SectionLabel vibe={vibe}>Share the link again</SectionLabel>
+            <div style={{
+              padding: 14,
+              borderRadius: T2.radii.lg,
+              background: pal.creamSoft,
+              border: `1.5px solid ${pal.line}`,
+              marginBottom: 16,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+            }}>
+              <div style={{
+                fontFamily: '"JetBrains Mono", monospace',
+                fontSize: 11,
+                color: pal.ink,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                flex: 1,
+              }}>{shareUrl}</div>
+              <button
+                onClick={handleCopy}
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: T2.radii.pill,
+                  border: `1.5px solid ${pal.ink}`,
+                  background: copied ? pal.sage : pal.cream,
+                  color: copied ? pal.cream : pal.ink,
+                  fontFamily: 'Inter, sans-serif', fontSize: 12, fontWeight: 600,
+                  cursor: 'pointer', flexShrink: 0,
+                }}>{copied ? '✓' : 'copy'}</button>
+            </div>
+            <button
+              onClick={handleShare}
+              style={{
+                width: '100%',
+                padding: '10px 0',
+                borderRadius: T2.radii.pill,
+                border: `1.5px solid ${pal.ink}`,
+                background: 'transparent',
+                color: pal.ink,
+                fontFamily: 'Inter, sans-serif',
+                fontSize: 13, fontWeight: 600,
+                cursor: 'pointer',
+                marginBottom: 12,
+              }}>Send via Messages / WhatsApp</button>
+          </>
+        )}
+      </div>
+
+      {/* Pulse animation for the "still picking" status dot */}
+      <style>{`
+        @keyframes plotpulse {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50% { opacity: 0.5; transform: scale(1.3); }
+        }
+      `}</style>
+    </ScreenShell>
+  );
+}
+
+// Tiny hash so member colors stay stable across renders without
+// importing a real hash library.
+function _hashStr(s) {
+  let h = 0;
+  for (let i = 0; i < (s || '').length; i++) {
+    h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  }
+  return h;
 }
 
 function AuthScreen({ vibe, onContinue }) {
@@ -631,7 +868,7 @@ function HomeScreen({ vibe, currentGroup, onOpenGroup, onCreate, onProfile }) {
             textAlign: 'center',
             marginBottom: 12,
           }}>
-            No groups yet. Tap "New group" to create one and share the link with friends.
+            No groups yet. Tap "New group" and rally the crew.
           </div>
         )}
 
@@ -897,7 +1134,7 @@ function CreateGroupScreen({ vibe, onBack, onCreated }) {
               fontFamily: 'Inter, sans-serif',
               fontSize: 13, color: pal.inkSoft, marginBottom: 22,
             }}>
-              Send this link to your friends. They open it on their phones, type their name, join.
+              Send this to your usual suspects. They tap the link, type their name, in.
             </div>
 
             <SectionLabel vibe={vibe}>Share link</SectionLabel>
@@ -1767,7 +2004,7 @@ function MemoriesScreen({ vibe, onBack }) {
             fontSize: 13,
             textAlign: 'center',
           }}>
-            Lock in a place and tap "We went →" — it'll show up here.
+            No memories yet. Get out there. Tap "We went →" after a hangout and it lands here.
           </div>
         </div>
       ) : (
@@ -2014,7 +2251,7 @@ function ProfileScreen({ vibe, iconStyle, currentGroup, onLeaveGroup, onBack }) 
 
 // Export
 Object.assign(window, {
-  AuthScreen, JoinGroupScreen, HomeScreen, CreateGroupScreen,
+  AuthScreen, JoinGroupScreen, WaitingRoomScreen, HomeScreen, CreateGroupScreen,
   SetPrefsScreen, RecsScreen, GroupDecisionScreen,
   MemoriesScreen, ProfileScreen,
 });

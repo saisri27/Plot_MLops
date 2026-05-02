@@ -16,6 +16,7 @@ Group preference merging logic:
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any
@@ -827,12 +828,41 @@ def groups_set_prefs(group_id: str, request: SetGroupPrefsRequest):
 def groups_get(group_id: str):
     """
     Full live state: members + each one's prefs + every yay/nahh on the
-    current rec_id. Frontend polls this to keep the voting tally in sync.
+    current rec_id + the active rec's venues. The frontend polls this
+    every ~4s. The `active_rec` field is the key piece that makes the
+    lobby model work — when one member taps "Get our recs", every other
+    member's next poll picks up the venues here without re-running the LLM.
     """
     _require_db()
     g = get_group(group_id)
     if not g:
         raise HTTPException(status_code=404, detail="Group not found.")
+
+    active_rec_payload = None
+    raw = g.get("active_rec")
+    if raw:
+        # Stamp model_version etc into a shape that mirrors a /recommend
+        # response so the UI can hydrate recState the same way regardless
+        # of whether it triggered the rec or polled it in.
+        venues = raw.get("top_venues_payload") or []
+        # Some old logs may have come back as a JSON string; coerce.
+        if isinstance(venues, str):
+            try:
+                venues = json.loads(venues)
+            except (TypeError, ValueError):
+                venues = []
+        model_version = (raw.get("model_version") or "rules_v1").strip()
+        used_llm = "+" in model_version  # convention: "<llm_model>+<prompt>"
+        llm_model = model_version.split("+", 1)[0] if used_llm else None
+        active_rec_payload = {
+            "rec_id": int(raw["id"]),
+            "model_version": model_version,
+            "used_llm": used_llm,
+            "llm_model": llm_model,
+            "llm_latency_ms": raw.get("llm_latency_ms"),
+            "recommendations": venues,
+        }
+
     return {
         "id": str(g["id"]),
         "name": g["name"],
@@ -857,6 +887,7 @@ def groups_get(group_id: str):
             }
             for v in g["votes"]
         ],
+        "active_rec": active_rec_payload,
     }
 
 

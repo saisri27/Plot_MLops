@@ -508,8 +508,10 @@ def set_member_prefs(group_id: str, user_id: str, prefs: dict[str, Any]) -> None
 def get_group(group_id: str) -> dict[str, Any] | None:
     """
     Full group state for the live planning UI: members + each one's prefs +
-    every yay/nahh on the current rec_id. Polled every ~5 s by clients to
-    keep the voting tally in sync.
+    every yay/nahh on the current rec_id + the actual rec venues if a rec
+    has been triggered. Polled every ~4 s by clients so the moment any one
+    member taps "Get our recs", every other phone hydrates from the same
+    rec without re-running the LLM.
     """
     sql_group = (
         "SELECT id, name, invite_token, created_by, last_rec_id, created_at "
@@ -527,6 +529,11 @@ def get_group(group_id: str) -> dict[str, Any] | None:
         WHERE group_id = %s AND rec_id = %s
         ORDER BY inserted_at DESC;
     """
+    sql_active_rec = """
+        SELECT id, top_venues_payload, model_version, llm_latency_ms, llm_cost_usd
+        FROM recommendation_log
+        WHERE id = %s;
+    """
     with _get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(sql_group, (group_id,))
         group = cur.fetchone()
@@ -536,11 +543,17 @@ def get_group(group_id: str) -> dict[str, Any] | None:
         cur.execute(sql_members, (group_id,))
         members = [dict(r) for r in cur.fetchall()]
         votes = []
+        active_rec = None
         if group["last_rec_id"] is not None:
             cur.execute(sql_votes, (group_id, group["last_rec_id"]))
             votes = [dict(r) for r in cur.fetchall()]
+            cur.execute(sql_active_rec, (group["last_rec_id"],))
+            row = cur.fetchone()
+            if row:
+                active_rec = dict(row)
     group["members"] = members
     group["votes"] = votes
+    group["active_rec"] = active_rec
     return group
 
 

@@ -1,5 +1,5 @@
 // Plot — App entry
-const { useState, useEffect } = React;
+const { useState, useEffect, useRef } = React;
 
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "vibe": "editorial",
@@ -14,6 +14,7 @@ const SCREENS = [
   { id: 'home',     label: 'Home' },
   { id: 'create',   label: 'Create group' },
   { id: 'prefs',    label: 'Set prefs' },
+  { id: 'lobby',    label: 'Waiting room' },
   { id: 'recs',     label: 'Recommendations' },
   { id: 'decision', label: 'Group decision' },
   { id: 'memories', label: 'Memories' },
@@ -70,14 +71,40 @@ function PlotApp() {
   const RECS_POOL_SIZE = 8;
   const RECS_VISIBLE = 5;
 
+  // Group lobby state — what every member's phone polls. The lobby screen
+  // reads this; the polling effect below keeps it fresh every ~4 s.
+  const [lobbyState, setLobbyState] = useState(null);
+  const lastSeenRecIdRef = useRef(null);
+
   // Submit handler — called by SetPrefsScreen with the user's chosen prefs.
-  // Two paths:
-  //   * SOLO  → POST /recommend directly with this user's prefs
-  //   * GROUP → POST /groups/{id}/prefs (save my prefs), then POST
-  //             /groups/{id}/recommend (server merges all members' prefs).
-  // Both paths shape recState identically so the rest of the UI doesn't
-  // care which mode it's in.
+  // Two flows now:
+  //   * SOLO  → POST /recommend immediately, jump to Recs.
+  //   * GROUP → POST /groups/{id}/prefs to save MY prefs, then route to
+  //             the lobby. The lobby polls until any member taps "Get our
+  //             recs", at which point everyone transitions to Recs together.
   async function handleSubmitPrefs(prefs) {
+    setVotes({});
+    if (currentGroup && currentGroup.id) {
+      // Group flow — save my prefs, head to the lobby.
+      try {
+        await window.PLOT_API.setGroupPrefs(currentGroup.id, prefs);
+      } catch (err) {
+        // Saving prefs is best-effort; we still go to the lobby because
+        // the user can retry from there or others can trigger recs.
+        // eslint-disable-next-line no-console
+        console.warn('setGroupPrefs failed, going to lobby anyway:', err);
+      }
+      setRecState({
+        loading: false, error: null, venues: [], events: [],
+        rec_id: null, used_llm: false, llm_model: null,
+        llm_latency_ms: null, last_prefs: prefs,
+        pool_offset: 0,
+      });
+      setScreen('lobby');
+      return;
+    }
+
+    // Solo flow — straight to recs (unchanged behavior).
     setRecState({
       loading: true, error: null, venues: [], events: [],
       rec_id: null, used_llm: false, llm_model: null,
@@ -85,25 +112,11 @@ function PlotApp() {
       pool_offset: 0,
     });
     setScreen('recs');
-    setVotes({});
     try {
-      let recRes, eventRes;
-      if (currentGroup && currentGroup.id) {
-        // Group mode: save my prefs to the group, then ask the server to
-        // merge all members' prefs and rank. We still call /events
-        // separately because group recs don't include events.
-        await window.PLOT_API.setGroupPrefs(currentGroup.id, prefs);
-        [recRes, eventRes] = await Promise.all([
-          window.PLOT_API.groupRecommend(currentGroup.id, RECS_POOL_SIZE).catch((e) => ({ _err: e })),
-          window.PLOT_API.events(prefs, RECS_POOL_SIZE).catch(() => ({ events: [] })),
-        ]);
-      } else {
-        // Solo mode (unchanged behavior)
-        [recRes, eventRes] = await Promise.all([
-          window.PLOT_API.recommend(prefs, RECS_POOL_SIZE).catch((e) => ({ _err: e })),
-          window.PLOT_API.events(prefs, RECS_POOL_SIZE).catch(() => ({ events: [] })),
-        ]);
-      }
+      const [recRes, eventRes] = await Promise.all([
+        window.PLOT_API.recommend(prefs, RECS_POOL_SIZE).catch((e) => ({ _err: e })),
+        window.PLOT_API.events(prefs, RECS_POOL_SIZE).catch(() => ({ events: [] })),
+      ]);
       if (recRes && recRes._err) throw recRes._err;
       setRecState((s) => ({
         ...s,
@@ -119,6 +132,93 @@ function PlotApp() {
       setRecState((s) => ({ ...s, loading: false, error: String(err.message || err) }));
     }
   }
+
+  // Triggered from the lobby by any member tapping "Get our recs".
+  // Runs the LLM once on the merged prefs; everyone else's poll picks up
+  // last_rec_id and hydrates from the same response.
+  async function handleGroupRecsTrigger() {
+    if (!currentGroup || !currentGroup.id) return;
+    setRecState((s) => ({ ...s, loading: true, error: null }));
+    try {
+      const [recRes, eventRes] = await Promise.all([
+        window.PLOT_API.groupRecommend(currentGroup.id, RECS_POOL_SIZE).catch((e) => ({ _err: e })),
+        // Events use the user's own prefs — they're not group-merged in
+        // the backend yet. Best-effort.
+        recState.last_prefs
+          ? window.PLOT_API.events(recState.last_prefs, RECS_POOL_SIZE).catch(() => ({ events: [] }))
+          : Promise.resolve({ events: [] }),
+      ]);
+      if (recRes && recRes._err) throw recRes._err;
+      setRecState((s) => ({
+        ...s,
+        loading: false,
+        venues: recRes.recommendations || [],
+        events: eventRes.events || [],
+        rec_id: recRes.rec_id || null,
+        used_llm: !!recRes.used_llm,
+        llm_model: recRes.llm_model || null,
+        llm_latency_ms: recRes.llm_latency_ms || null,
+        pool_offset: 0,
+      }));
+      lastSeenRecIdRef.current = recRes.rec_id || null;
+      setScreen('recs');
+    } catch (err) {
+      setRecState((s) => ({ ...s, loading: false, error: String(err.message || err) }));
+    }
+  }
+
+  // Lobby polling: every 4 s while the user is on the lobby OR recs screen
+  // in group mode, fetch the latest /groups/{id} state. Two reasons to do
+  // this even outside the lobby:
+  //   1. Recs screen needs to keep the votes tally fresh (other members
+  //      yay/nahh-ing show up here).
+  //   2. If a different member kicked off a fresh "Get our recs" while
+  //      we were on the recs screen, we'd want to re-hydrate.
+  useEffect(() => {
+    if (!currentGroup || !currentGroup.id) return undefined;
+    if (screen !== 'lobby' && screen !== 'recs' && screen !== 'decision') return undefined;
+
+    let cancelled = false;
+    async function tick() {
+      try {
+        const state = await window.PLOT_API.getGroupState(currentGroup.id);
+        if (cancelled) return;
+        setLobbyState(state);
+
+        // If the server has an active rec we haven't seen yet, hydrate
+        // recState from it and route the user into recs. This is how
+        // members who didn't tap "Get our recs" themselves get pulled in.
+        const ar = state && state.active_rec;
+        if (ar && ar.rec_id && lastSeenRecIdRef.current !== ar.rec_id) {
+          lastSeenRecIdRef.current = ar.rec_id;
+          // Members who didn't trigger this rec won't have events
+          // pre-fetched. Their own /events will fire on the recs screen
+          // if needed; for now we just hydrate venues.
+          setRecState((s) => ({
+            ...s,
+            loading: false,
+            error: null,
+            venues: ar.recommendations || [],
+            // Don't clobber events that the trigger-er already loaded;
+            // for non-triggerers, this stays empty until /events fires.
+            events: s.events && s.events.length ? s.events : [],
+            rec_id: ar.rec_id,
+            used_llm: !!ar.used_llm,
+            llm_model: ar.llm_model || null,
+            llm_latency_ms: ar.llm_latency_ms || null,
+            pool_offset: 0,
+          }));
+          if (screen === 'lobby') setScreen('recs');
+        }
+      } catch (e) {
+        // Network blips during polling are non-fatal — try again next tick
+      }
+    }
+
+    tick();
+    const id = setInterval(tick, 4000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [screen, currentGroup && currentGroup.id]);
 
   // After a successful join (from JoinGroupScreen) — set context and
   // route the user into the prefs flow so they can contribute their
@@ -204,7 +304,8 @@ function PlotApp() {
       case 'home':     return <HomeScreen {...props} currentGroup={currentGroup} onOpenGroup={() => setScreen('prefs')} onCreate={() => setScreen('create')} onProfile={() => setScreen('profile')} />;
       case 'create':   return <CreateGroupScreen {...props} onBack={() => setScreen('home')} onCreated={handleCreatedGroup} />;
       case 'prefs':    return <SetPrefsScreen {...props} currentGroup={currentGroup} onBack={() => setScreen('home')} onSubmit={handleSubmitPrefs} />;
-      case 'recs':     return <RecsScreen {...props} currentGroup={currentGroup} recState={recState} votes={votes} setVotes={setVotes} onShuffle={handleShuffle} onBack={() => setScreen('prefs')} onLockedIn={() => setScreen('decision')} />;
+      case 'lobby':    return <WaitingRoomScreen {...props} currentGroup={currentGroup} lobbyState={lobbyState} onTriggerRecs={handleGroupRecsTrigger} onBack={() => setScreen('prefs')} loading={recState.loading} />;
+      case 'recs':     return <RecsScreen {...props} currentGroup={currentGroup} recState={recState} lobbyState={lobbyState} votes={votes} setVotes={setVotes} onShuffle={handleShuffle} onBack={() => setScreen(currentGroup ? 'lobby' : 'prefs')} onLockedIn={() => setScreen('decision')} />;
       case 'decision': return <GroupDecisionScreen {...props} currentGroup={currentGroup} recState={recState} votes={votes} onBack={() => setScreen('recs')} onMemories={() => setScreen('memories')} onWentThere={handleWentThere} />;
       case 'memories': return <MemoriesScreen {...props} onBack={() => setScreen('decision')} />;
       case 'profile':  return <ProfileScreen {...props} currentGroup={currentGroup} onLeaveGroup={handleLeaveGroup} onBack={() => setScreen('home')} />;
