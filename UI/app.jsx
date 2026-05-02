@@ -306,7 +306,7 @@ function PlotApp() {
       case 'prefs':    return <SetPrefsScreen {...props} currentGroup={currentGroup} onBack={() => setScreen('home')} onSubmit={handleSubmitPrefs} />;
       case 'lobby':    return <WaitingRoomScreen {...props} currentGroup={currentGroup} lobbyState={lobbyState} onTriggerRecs={handleGroupRecsTrigger} onBack={() => setScreen('prefs')} loading={recState.loading} />;
       case 'recs':     return <RecsScreen {...props} currentGroup={currentGroup} recState={recState} lobbyState={lobbyState} votes={votes} setVotes={setVotes} onShuffle={handleShuffle} onBack={() => setScreen(currentGroup ? 'lobby' : 'prefs')} onLockedIn={() => setScreen('decision')} />;
-      case 'decision': return <GroupDecisionScreen {...props} currentGroup={currentGroup} recState={recState} votes={votes} onBack={() => setScreen('recs')} onMemories={() => setScreen('memories')} onWentThere={handleWentThere} />;
+      case 'decision': return <GroupDecisionScreen {...props} currentGroup={currentGroup} lobbyState={lobbyState} recState={recState} votes={votes} onBack={() => setScreen('recs')} onMemories={() => setScreen('memories')} onWentThere={handleWentThere} />;
       case 'memories': return <MemoriesScreen {...props} onBack={() => setScreen('decision')} />;
       case 'profile':  return <ProfileScreen {...props} currentGroup={currentGroup} onLeaveGroup={handleLeaveGroup} onBack={() => setScreen('home')} />;
       default: return null;

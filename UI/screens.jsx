@@ -1622,7 +1622,7 @@ function RecsScreen({ vibe, density, currentGroup, onBack, onLockedIn, votes, se
 // ─────────────────────────────────────────────────────────────
 // 6. Group Decision — locked-in pick + member votes
 // ─────────────────────────────────────────────────────────────
-function GroupDecisionScreen({ vibe, votes, onBack, onMemories, onWentThere, recState }) {
+function GroupDecisionScreen({ vibe, votes, onBack, onMemories, onWentThere, recState, currentGroup, lobbyState }) {
   const pal = T2.palette;
 
   // Find the user's first yay venue from the real Recs data they just voted on.
@@ -1638,11 +1638,42 @@ function GroupDecisionScreen({ vibe, votes, onBack, onMemories, onWentThere, rec
     SAMPLE_VENUES[0];
   const cat = T2.categories.find(c => c.id === locked.category);
 
-  // Mock member votes
-  const memberVotes = SAMPLE_MEMBERS.map((m, i) => ({
-    ...m,
-    vote: i === 4 ? 'yay' : (['yay','yay','yay','nahh'][i] || 'yay'),
-  }));
+  // Real member votes — built from polled lobby state in group mode, or
+  // just the current user's own vote in solo mode. No more SAMPLE_MEMBERS
+  // ghost names voting on a venue they were never invited to.
+  const myUserId = window.PLOT_API.getUserId();
+  const memberColors = ['terracotta', 'sage', 'lilac', 'peach'];
+  function _hashId(s) {
+    let h = 0;
+    for (let i = 0; i < (s || '').length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+    return h;
+  }
+  let memberVotes;
+  if (currentGroup && lobbyState && lobbyState.members) {
+    // Group mode: every member of the group, with their latest vote on
+    // the locked-in venue (if any). lobbyState.votes is already ordered
+    // newest-first by the backend, so the first hit per user wins.
+    const latestVoteFor = {};
+    for (const v of (lobbyState.votes || [])) {
+      if (v.venue_name === locked.name && !(v.user_id in latestVoteFor)) {
+        latestVoteFor[v.user_id] = v.signal;
+      }
+    }
+    memberVotes = lobbyState.members.map((m) => ({
+      id: m.user_id,
+      name: m.user_id === myUserId ? 'You' : m.display_name,
+      color: memberColors[Math.abs(_hashId(m.user_id)) % memberColors.length],
+      vote: latestVoteFor[m.user_id] || null,
+    }));
+  } else {
+    // Solo mode: only the user is in the "group" of one.
+    memberVotes = [{
+      id: myUserId,
+      name: 'You',
+      color: 'terracotta',
+      vote: votes[locked.name] || null,
+    }];
+  }
   const yayCount = memberVotes.filter(m => m.vote === 'yay').length;
 
   return (
