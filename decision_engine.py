@@ -41,7 +41,19 @@ import llm_rerank  # noqa: E402
 import llm_intent  # noqa: E402
 
 try:
-    from db import log_feedback, log_recommendation_request, upsert_user  # noqa: E402
+    from db import (  # noqa: E402
+        create_group,
+        get_group,
+        get_group_by_token,
+        join_group,
+        list_user_groups,
+        log_feedback,
+        log_recommendation_request,
+        record_group_vote,
+        set_member_prefs,
+        update_group_last_rec,
+        upsert_user,
+    )
 
     DB_AVAILABLE = True
 except Exception:
@@ -167,6 +179,37 @@ class EventsResponse(BaseModel):
     days_ahead: int
     events_found: int
     events: list[EventResult]
+
+
+class CreateGroupRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+    creator_user_id: str = Field(..., min_length=1, description="The host's device user_id")
+    creator_display_name: str | None = Field(
+        default=None, description="Optional display name for the host"
+    )
+
+
+class JoinGroupRequest(BaseModel):
+    user_id: str = Field(..., min_length=1)
+    display_name: str = Field(..., min_length=1, max_length=40)
+
+
+class SetGroupPrefsRequest(BaseModel):
+    user_id: str
+    budget: str = Field(..., description="One of: low, medium, high")
+    categories: list[str] = Field(..., min_length=1)
+    max_distance_km: float = Field(..., gt=0, le=50)
+
+
+class GroupVoteRequest(BaseModel):
+    user_id: str
+    venue_name: str
+    signal: str = Field(..., description="One of: yay, nahh")
+
+
+class GroupRecommendRequest(BaseModel):
+    requested_by: str = Field(..., description="Member's user_id who tapped 'Get recs'")
+    top_k: int = Field(default=5, ge=1, le=20)
 
 
 class FeedbackRequest(BaseModel):
@@ -684,6 +727,239 @@ def events(request: EventsRequest):
             for r in rows
         ],
     )
+
+
+# ---------------------------------------------------------------------------
+# /groups — multi-user shareable-link sessions
+# ---------------------------------------------------------------------------
+
+
+def _require_db() -> None:
+    """Group endpoints need Supabase; refuse cleanly if it's not configured."""
+    if not DB_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Group features require DATABASE_URL (Supabase) to be set.",
+        )
+
+
+@app.post("/groups")
+def groups_create(request: CreateGroupRequest):
+    """
+    Mint a new group + invite token. The creator is added as the first
+    member in the same DB transaction so they immediately appear in the
+    /groups/{id} response. The frontend builds the share URL from
+    invite_token (e.g. https://plot-ui.../Plot.html?join=<token>).
+    """
+    _require_db()
+    try:
+        group = create_group(name=request.name, created_by=request.creator_user_id)
+        if request.creator_display_name:
+            join_group(
+                group_id=str(group["id"]),
+                user_id=request.creator_user_id,
+                display_name=request.creator_display_name,
+            )
+        return {
+            "id": str(group["id"]),
+            "name": group["name"],
+            "invite_token": group["invite_token"],
+            "created_by": group["created_by"],
+            "created_at": group["created_at"].isoformat() if group.get("created_at") else None,
+        }
+    except Exception as exc:
+        logger.exception("create_group failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"DB write failed: {exc}") from exc
+
+
+@app.get("/groups/by-token/{token}")
+def groups_peek_by_token(token: str):
+    """
+    Lightweight preview for the 'someone invited you' landing screen.
+    Returns name + member_count without leaking other members' user_ids.
+    404 if the token is bogus.
+    """
+    _require_db()
+    g = get_group_by_token(token)
+    if not g:
+        raise HTTPException(status_code=404, detail="No group with that invite token.")
+    return {
+        "id": str(g["id"]),
+        "name": g["name"],
+        "invite_token": g["invite_token"],
+        "member_count": int(g["member_count"]),
+    }
+
+
+@app.post("/groups/{group_id}/join")
+def groups_join(group_id: str, request: JoinGroupRequest):
+    """Add a member (or refresh their display_name) to an existing group."""
+    _require_db()
+    try:
+        join_group(group_id=group_id, user_id=request.user_id, display_name=request.display_name)
+        return {"status": "joined", "group_id": group_id, "user_id": request.user_id}
+    except Exception as exc:
+        logger.exception("join_group failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"DB write failed: {exc}") from exc
+
+
+@app.post("/groups/{group_id}/prefs")
+def groups_set_prefs(group_id: str, request: SetGroupPrefsRequest):
+    """Save a member's per-group prefs so the next /recommend can merge them."""
+    _require_db()
+    try:
+        set_member_prefs(
+            group_id=group_id,
+            user_id=request.user_id,
+            prefs={
+                "budget": request.budget,
+                "categories": list(request.categories),
+                "max_distance_km": float(request.max_distance_km),
+            },
+        )
+        return {"status": "ok"}
+    except Exception as exc:
+        logger.exception("set_member_prefs failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"DB write failed: {exc}") from exc
+
+
+@app.get("/groups/{group_id}")
+def groups_get(group_id: str):
+    """
+    Full live state: members + each one's prefs + every yay/nahh on the
+    current rec_id. Frontend polls this to keep the voting tally in sync.
+    """
+    _require_db()
+    g = get_group(group_id)
+    if not g:
+        raise HTTPException(status_code=404, detail="Group not found.")
+    return {
+        "id": str(g["id"]),
+        "name": g["name"],
+        "invite_token": g["invite_token"],
+        "created_by": g["created_by"],
+        "last_rec_id": g["last_rec_id"],
+        "members": [
+            {
+                "user_id": m["user_id"],
+                "display_name": m["display_name"],
+                "prefs": m.get("prefs"),
+                "joined_at": m["joined_at"].isoformat() if m.get("joined_at") else None,
+            }
+            for m in g["members"]
+        ],
+        "votes": [
+            {
+                "user_id": v["user_id"],
+                "venue_name": v["venue_name"],
+                "signal": v["signal"],
+                "inserted_at": v["inserted_at"].isoformat() if v.get("inserted_at") else None,
+            }
+            for v in g["votes"]
+        ],
+    }
+
+
+@app.post("/groups/{group_id}/recommend", response_model=RecommendResponse)
+def groups_recommend(group_id: str, request: GroupRecommendRequest):
+    """
+    Group-aware recommendation. We pull all members' prefs from
+    group_members, build a synthetic RecommendRequest with a UserPreference
+    per member who has set their prefs, and run the existing /recommend
+    pipeline. Members who haven't set prefs yet are skipped (they'll join
+    the merged set once they do).
+    """
+    _require_db()
+    g = get_group(group_id)
+    if not g:
+        raise HTTPException(status_code=404, detail="Group not found.")
+
+    user_prefs: list[UserPreference] = []
+    for m in g["members"]:
+        prefs = m.get("prefs") or {}
+        if not prefs.get("categories"):
+            continue
+        try:
+            user_prefs.append(
+                UserPreference(
+                    user_id=m["user_id"],
+                    budget=str(prefs.get("budget") or "medium"),
+                    categories=list(prefs["categories"]),
+                    max_distance_km=float(prefs.get("max_distance_km") or 5.0),
+                )
+            )
+        except Exception as exc:  # bad prefs row — skip, don't fail the group
+            logger.warning("Skipping member %s with malformed prefs: %s", m["user_id"], exc)
+
+    if not user_prefs:
+        raise HTTPException(
+            status_code=400,
+            detail="No member has set their preferences yet. At least one member must "
+            "set prefs before the group can get recommendations.",
+        )
+
+    response = recommend(RecommendRequest(users=user_prefs, top_k=request.top_k))
+
+    # Stamp the rec_id on the group so all members' phones know which rec
+    # to vote on (the next /groups/{id} poll picks it up).
+    if response.rec_id is not None:
+        try:
+            update_group_last_rec(group_id, response.rec_id)
+        except Exception as exc:
+            logger.warning("update_group_last_rec failed (non-fatal): %s", exc)
+
+    return response
+
+
+@app.post("/groups/{group_id}/vote")
+def groups_vote(group_id: str, request: GroupVoteRequest):
+    """Record a yay/nahh from one member on the group's current rec_id."""
+    _require_db()
+    if request.signal not in {"yay", "nahh"}:
+        raise HTTPException(status_code=400, detail="signal must be 'yay' or 'nahh'.")
+
+    g = get_group(group_id)
+    if not g:
+        raise HTTPException(status_code=404, detail="Group not found.")
+    if g["last_rec_id"] is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No active rec to vote on — call /groups/{id}/recommend first.",
+        )
+
+    try:
+        vote_id = record_group_vote(
+            group_id=group_id,
+            rec_id=g["last_rec_id"],
+            user_id=request.user_id,
+            venue_name=request.venue_name,
+            signal=request.signal,
+        )
+        return {"status": "ok", "vote_id": vote_id, "rec_id": g["last_rec_id"]}
+    except Exception as exc:
+        logger.exception("record_group_vote failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"DB write failed: {exc}") from exc
+
+
+@app.get("/users/{user_id}/groups")
+def users_groups(user_id: str):
+    """List groups this user belongs to, newest first. Used by HomeScreen."""
+    _require_db()
+    rows = list_user_groups(user_id)
+    return {
+        "user_id": user_id,
+        "groups": [
+            {
+                "id": str(r["id"]),
+                "name": r["name"],
+                "invite_token": r["invite_token"],
+                "last_rec_id": r["last_rec_id"],
+                "member_count": int(r["member_count"]),
+                "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
+            }
+            for r in rows
+        ],
+    }
 
 
 @app.post("/parse", response_model=ParseIntentResponse)

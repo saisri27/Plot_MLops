@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import secrets
 from typing import Any
 
 import psycopg2
@@ -130,6 +131,59 @@ ALTER TABLE feedback DROP CONSTRAINT IF EXISTS feedback_user_id_fkey;
 CREATE INDEX IF NOT EXISTS idx_feedback_user_id ON feedback(user_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_venue   ON feedback(venue_name);
 CREATE INDEX IF NOT EXISTS idx_feedback_rec_id  ON feedback(rec_id);
+
+-- ============================================================
+-- Groups: shareable-link multi-user planning sessions.
+-- A creator mints a group + invite_token, sends the URL to friends.
+-- Friends open the URL, type a display name, and join. Identity is
+-- per-device (random user_id from localStorage) until real Supabase
+-- Auth lands; the schema doesn't care which kind of user_id it is.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS groups (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name            TEXT NOT NULL,
+    invite_token    TEXT UNIQUE NOT NULL,        -- short URL-safe token
+    created_by      TEXT NOT NULL,               -- creator's user_id
+    last_rec_id     INTEGER,                     -- the rec_id everyone is voting on
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_groups_invite_token ON groups(invite_token);
+CREATE INDEX IF NOT EXISTS idx_groups_created_by   ON groups(created_by);
+
+-- One row per (group, member). Composite primary key prevents the same
+-- person joining twice. `prefs` stores the member's per-group prefs as
+-- JSON (budget, categories, max_distance_km) so we can merge across
+-- members at recommend time.
+CREATE TABLE IF NOT EXISTS group_members (
+    group_id        UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    user_id         TEXT NOT NULL,
+    display_name    TEXT NOT NULL,
+    prefs           JSONB DEFAULT NULL,          -- {budget, categories, max_distance_km}
+    joined_at       TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (group_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id);
+
+-- One row per (group, rec_id, member, venue) yay/nahh. Lets every member's
+-- phone show the live tally as votes come in (frontend polls /groups/{id}).
+-- We don't dedupe in-place — the latest vote wins via inserted_at.
+CREATE TABLE IF NOT EXISTS group_votes (
+    id              SERIAL PRIMARY KEY,
+    group_id        UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    rec_id          INTEGER NOT NULL,
+    user_id         TEXT NOT NULL,
+    venue_name      TEXT NOT NULL,
+    signal          TEXT NOT NULL,               -- 'yay' | 'nahh'
+    inserted_at     TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_group_votes_group_rec ON group_votes(group_id, rec_id);
+CREATE INDEX IF NOT EXISTS idx_group_votes_member    ON group_votes(group_id, user_id);
+
+-- pgcrypto enables gen_random_uuid() above. Idempotent — no-op if already enabled.
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 """
 
 
@@ -362,6 +416,179 @@ def get_training_join() -> list[dict[str, Any]]:
     """
     with _get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(sql)
+        rows = cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Groups: shareable-link multi-user sessions
+# ---------------------------------------------------------------------------
+
+
+def _new_invite_token() -> str:
+    """Short URL-safe random string. ~6 bytes -> 8 base64url chars."""
+    return secrets.token_urlsafe(6)
+
+
+def create_group(name: str, created_by: str) -> dict[str, Any]:
+    """
+    Mint a new group + invite token. The creator is added as the first member
+    in the same transaction so they immediately show up in /groups/{id}.
+    Returns {id, name, invite_token, created_by, created_at}.
+    """
+    token = _new_invite_token()
+    sql_insert = """
+        INSERT INTO groups (name, invite_token, created_by)
+        VALUES (%s, %s, %s)
+        RETURNING id, name, invite_token, created_by, created_at;
+    """
+    sql_member = """
+        INSERT INTO group_members (group_id, user_id, display_name)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (group_id, user_id) DO NOTHING;
+    """
+    with _get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(sql_insert, (name, token, created_by))
+        row = cur.fetchone()
+        # Use the creator's user_id as their first display_name placeholder;
+        # they'll typically rename via the home/profile screen.
+        cur.execute(sql_member, (row["id"], created_by, "Host"))
+        conn.commit()
+    return dict(row)
+
+
+def get_group_by_token(token: str) -> dict[str, Any] | None:
+    """
+    Return a lightweight group preview (no member prefs) for the
+    'someone invited you' landing screen. None if the token is unknown.
+    """
+    sql = """
+        SELECT g.id, g.name, g.invite_token, g.created_by, g.created_at,
+               COUNT(gm.user_id) AS member_count
+        FROM groups g
+        LEFT JOIN group_members gm ON gm.group_id = g.id
+        WHERE g.invite_token = %s
+        GROUP BY g.id;
+    """
+    with _get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(sql, (token,))
+        row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def join_group(group_id: str, user_id: str, display_name: str) -> None:
+    """
+    Add (or refresh) a member of an existing group. ON CONFLICT updates the
+    display_name so a returning user can change how they appear without
+    creating a duplicate row.
+    """
+    sql = """
+        INSERT INTO group_members (group_id, user_id, display_name)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (group_id, user_id) DO UPDATE
+            SET display_name = EXCLUDED.display_name;
+    """
+    with _get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, (group_id, user_id, display_name))
+        conn.commit()
+
+
+def set_member_prefs(group_id: str, user_id: str, prefs: dict[str, Any]) -> None:
+    """Update a member's per-group preferences (budget, categories, distance)."""
+    sql = """
+        UPDATE group_members
+        SET prefs = %s::jsonb
+        WHERE group_id = %s AND user_id = %s;
+    """
+    with _get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, (json.dumps(prefs), group_id, user_id))
+        conn.commit()
+
+
+def get_group(group_id: str) -> dict[str, Any] | None:
+    """
+    Full group state for the live planning UI: members + each one's prefs +
+    every yay/nahh on the current rec_id. Polled every ~5 s by clients to
+    keep the voting tally in sync.
+    """
+    sql_group = (
+        "SELECT id, name, invite_token, created_by, last_rec_id, created_at "
+        "FROM groups WHERE id = %s;"
+    )
+    sql_members = """
+        SELECT user_id, display_name, prefs, joined_at
+        FROM group_members
+        WHERE group_id = %s
+        ORDER BY joined_at ASC;
+    """
+    sql_votes = """
+        SELECT user_id, venue_name, signal, inserted_at
+        FROM group_votes
+        WHERE group_id = %s AND rec_id = %s
+        ORDER BY inserted_at DESC;
+    """
+    with _get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(sql_group, (group_id,))
+        group = cur.fetchone()
+        if not group:
+            return None
+        group = dict(group)
+        cur.execute(sql_members, (group_id,))
+        members = [dict(r) for r in cur.fetchall()]
+        votes = []
+        if group["last_rec_id"] is not None:
+            cur.execute(sql_votes, (group_id, group["last_rec_id"]))
+            votes = [dict(r) for r in cur.fetchall()]
+    group["members"] = members
+    group["votes"] = votes
+    return group
+
+
+def update_group_last_rec(group_id: str, rec_id: int) -> None:
+    """Stamp the rec_id everyone is currently voting on."""
+    sql = "UPDATE groups SET last_rec_id = %s WHERE id = %s;"
+    with _get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, (rec_id, group_id))
+        conn.commit()
+
+
+def record_group_vote(
+    group_id: str,
+    rec_id: int,
+    user_id: str,
+    venue_name: str,
+    signal: str,
+) -> int:
+    """
+    Append a vote. We don't dedupe per (member, venue) here — the latest
+    inserted_at wins on the read side. That keeps writes cheap and lets us
+    reconstruct the full voting history later if we want.
+    """
+    sql = """
+        INSERT INTO group_votes (group_id, rec_id, user_id, venue_name, signal)
+        VALUES (%s, %s, %s, %s, %s)
+        RETURNING id;
+    """
+    with _get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, (group_id, rec_id, user_id, venue_name, signal))
+        vid = cur.fetchone()[0]
+        conn.commit()
+    return int(vid)
+
+
+def list_user_groups(user_id: str) -> list[dict[str, Any]]:
+    """Groups this user belongs to, newest first. Used by HomeScreen."""
+    sql = """
+        SELECT g.id, g.name, g.invite_token, g.last_rec_id, g.created_at,
+               COUNT(gm2.user_id) AS member_count
+        FROM groups g
+        JOIN group_members gm ON gm.group_id = g.id AND gm.user_id = %s
+        LEFT JOIN group_members gm2 ON gm2.group_id = g.id
+        GROUP BY g.id
+        ORDER BY g.created_at DESC;
+    """
+    with _get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(sql, (user_id,))
         rows = cur.fetchall()
     return [dict(r) for r in rows]
 

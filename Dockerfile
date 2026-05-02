@@ -28,7 +28,7 @@ RUN pip install -r requirements.txt
 # Copy only what the API needs — keep the image small and avoid baking any
 # training data, notebooks, .env, or local secrets.
 COPY decision_engine.py llm_rerank.py llm_intent.py \
-     recommendation_bigquery.py db.py ./
+     recommendation_bigquery.py db.py categories.py ./
 COPY prompts/ prompts/
 
 EXPOSE 8080
