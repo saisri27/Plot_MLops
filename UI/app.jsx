@@ -24,8 +24,15 @@ const SCREENS = [
 function PlotApp() {
   const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
   // Boot screen depends on URL state — see initial-screen logic below.
+  // First-launch users (no cached profile) always see the welcome /
+  // onboarding screen first, even if they came in via a ?join= link;
+  // we'll route them onward after they fill in their name. Returning
+  // users skip straight to the right place.
   const [screen, setScreen] = useState(() => {
     const params = new URLSearchParams(window.location.search);
+    const profile = window.PLOT_API.getLocalProfile();
+    const hasProfile = !!(profile && profile.name);
+    if (!hasProfile) return 'auth';
     if (params.get('join')) return 'join';
     return window.PLOT_API.getCurrentGroup() ? 'home' : 'prefs';
   });
@@ -352,7 +359,13 @@ function PlotApp() {
   const screenEl = (() => {
     const props = { vibe: tweaks.vibe, iconStyle: tweaks.iconStyle, density: tweaks.density };
     switch (screen) {
-      case 'auth':     return <AuthScreen {...props} onContinue={() => setScreen('home')} />;
+      case 'auth':     return <AuthScreen {...props} onContinue={() => {
+        // After onboarding, route to wherever the URL / state says we
+        // should be: a join-link → Join, an existing group → Home, else Prefs.
+        if (pendingInviteToken) setScreen('join');
+        else if (currentGroup) setScreen('home');
+        else setScreen('prefs');
+      }} />;
       case 'join':     return <JoinGroupScreen {...props} token={pendingInviteToken} onBack={() => setScreen('home')} onJoined={handleJoinedGroup} />;
       case 'home':     return <HomeScreen {...props} currentGroup={currentGroup} onOpenGroup={handleSwitchGroup} onCreate={() => setScreen('create')} onProfile={() => setScreen('profile')} />;
       case 'create':   return <CreateGroupScreen {...props} onBack={() => setScreen('home')} onCreated={handleCreatedGroup} />;

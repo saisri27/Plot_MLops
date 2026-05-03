@@ -161,6 +161,11 @@ function JoinGroupScreen({ vibe, token, onBack, onJoined }) {
   const [name, setName] = useState(() => window.PLOT_API.getDisplayName());
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState(null);
+  // True when the polled group state confirms the current user is already
+  // in the members list — we then show a "you're already in" CTA instead
+  // of the join form, so re-opening an invite link doesn't make the user
+  // re-type their name.
+  const [alreadyMember, setAlreadyMember] = useState(false);
 
   useEffect(() => {
     if (!token) {
@@ -168,8 +173,26 @@ function JoinGroupScreen({ vibe, token, onBack, onJoined }) {
       return;
     }
     let cancelled = false;
+    const myUserId = window.PLOT_API.getUserId();
     window.PLOT_API.peekGroupByToken(token)
-      .then((p) => { if (!cancelled) setPreview(p); })
+      .then(async (p) => {
+        if (cancelled) return;
+        setPreview(p);
+        // Fetch full state once so we can detect "already a member" and
+        // skip the form entirely. Best-effort: a network blip means we
+        // just show the form like before.
+        try {
+          const full = await window.PLOT_API.getGroupState(p.id);
+          if (cancelled) return;
+          const member = (full.members || []).find((m) => m.user_id === myUserId);
+          if (member) {
+            setAlreadyMember(true);
+            // Pre-fill the name field with their stored display_name in
+            // case they want to keep using it / re-confirm.
+            if (member.display_name) setName(member.display_name);
+          }
+        } catch (e) { /* non-fatal */ }
+      })
       .catch((e) => { if (!cancelled) setPreviewError(String(e.message || e)); });
     return () => { cancelled = true; };
   }, [token]);
@@ -250,15 +273,36 @@ function JoinGroupScreen({ vibe, token, onBack, onJoined }) {
               textWrap: 'pretty',
               marginBottom: 8,
             }}>
-              Join {preview.name}
+              {alreadyMember ? `You're in ${preview.name}` : `Join ${preview.name}`}
             </div>
             <div style={{
               fontFamily: 'Inter, sans-serif',
               fontSize: 14, color: pal.inkSoft, marginBottom: 28,
             }}>
-              {preview.member_count} {preview.member_count === 1 ? 'person' : 'people'} in so far · come pick a spot
+              {alreadyMember
+                ? `Already a member as ${name || 'you'}. Hop straight in.`
+                : `${preview.member_count} ${preview.member_count === 1 ? 'person' : 'people'} in so far · come pick a spot`}
             </div>
 
+            {alreadyMember && (
+              // Skip the form entirely when the device's user_id is
+              // already in this group's members. Re-opening the invite
+              // link from the same phone now just re-enters the group.
+              <PrimaryButton
+                vibe={vibe}
+                tone="terracotta"
+                onClick={() => onJoined({
+                  id: preview.id,
+                  name: preview.name,
+                  invite_token: preview.invite_token,
+                  my_display_name: name || window.PLOT_API.getDisplayName() || 'You',
+                })}
+              >
+                Continue →
+              </PrimaryButton>
+            )}
+
+            {!alreadyMember && <>
             <div style={{
               fontFamily: 'Inter, sans-serif',
               fontSize: 12, fontWeight: 600,
@@ -311,6 +355,7 @@ function JoinGroupScreen({ vibe, token, onBack, onJoined }) {
             >
               {joining ? 'Joining…' : `Join ${preview.name} →`}
             </PrimaryButton>
+            </>}
           </>
         )}
       </div>
@@ -557,8 +602,37 @@ function _hashStr(s) {
 
 function AuthScreen({ vibe, onContinue }) {
   const pal = T2.palette;
-  const [email, setEmail] = useState('');
-  const [stage, setStage] = useState('input');
+  // Real onboarding form (replaces the half-baked email-magic-link).
+  // Three fields: name (required), pronouns (optional), DOB (optional).
+  // Submit calls /users/{id}/profile and caches in localStorage.
+  const existing = (typeof window !== 'undefined' && window.PLOT_API.getLocalProfile()) || {};
+  const [name, setName] = useState(existing.name || window.PLOT_API.getDisplayName() || '');
+  const [pronouns, setPronouns] = useState(existing.pronouns || '');
+  const [dob, setDob] = useState(existing.date_of_birth || '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function handleSubmit() {
+    if (!name.trim() || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await window.PLOT_API.saveProfile({
+        name: name.trim(),
+        pronouns: pronouns.trim() || null,
+        date_of_birth: dob || null,
+      });
+      onContinue();
+    } catch (e) {
+      // Profile save is best-effort. If the network fails, still let the
+      // user in (we cached display name locally) and surface a soft error.
+      window.PLOT_API.setDisplayName(name.trim());
+      setError(String(e.message || e));
+      onContinue();
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <ScreenShell vibe={vibe} bg={pal.cream}>
@@ -691,91 +765,122 @@ function AuthScreen({ vibe, onContinue }) {
           bottom: 22,
           zIndex: 5,
         }}>
-          {stage === 'input' ? (
+          {/* Compact frosted card with three fields. Stacks vertically so
+              it stays readable on small phones; matches the splash visual
+              language the rest of the screen has. */}
+          <div style={{
+            padding: 14,
+            background: 'rgba(248,245,239,0.95)',
+            backdropFilter: 'blur(14px)',
+            WebkitBackdropFilter: 'blur(14px)',
+            borderRadius: T2.radii.lg,
+            border: `1.5px solid ${pal.ink}`,
+            boxShadow: vibe === 'playful'
+              ? `4px 4px 0 ${pal.ink}`
+              : '0 8px 24px rgba(42,36,32,0.22)',
+            transform: vibe === 'playful' ? 'rotate(-0.5deg)' : 'none',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10,
+          }}>
             <div style={{
-              display: 'flex',
-              gap: 6,
-              padding: 6,
-              background: 'rgba(248,245,239,0.95)',
-              backdropFilter: 'blur(14px)',
-              WebkitBackdropFilter: 'blur(14px)',
-              borderRadius: T2.radii.pill,
-              border: `1.5px solid ${pal.ink}`,
-              boxShadow: vibe === 'playful'
-                ? `4px 4px 0 ${pal.ink}`
-                : '0 8px 24px rgba(42,36,32,0.22)',
-              transform: vibe === 'playful' ? 'rotate(-0.5deg)' : 'none',
-            }}>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="your@email.com"
+              fontFamily: '"JetBrains Mono", monospace',
+              fontSize: 9,
+              color: pal.inkMute,
+              letterSpacing: '0.1em',
+              textTransform: 'uppercase',
+            }}>welcome — tell us who you are</div>
+
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Your name"
+              autoFocus
+              style={{
+                width: '100%',
+                height: 42,
+                padding: '0 12px',
+                background: pal.cream,
+                border: `1px solid ${pal.line}`,
+                borderRadius: T2.radii.md,
+                fontFamily: 'Inter, sans-serif',
+                fontSize: 15, fontWeight: 500, color: pal.ink,
+                outline: 'none',
+                boxSizing: 'border-box',
+              }}
+            />
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <select
+                value={pronouns}
+                onChange={(e) => setPronouns(e.target.value)}
                 style={{
                   flex: 1,
-                  height: 44,
-                  padding: '0 16px',
-                  background: 'transparent',
-                  border: 'none',
+                  height: 42,
+                  padding: '0 10px',
+                  background: pal.cream,
+                  border: `1px solid ${pal.line}`,
+                  borderRadius: T2.radii.md,
                   fontFamily: 'Inter, sans-serif',
-                  fontSize: 15, color: pal.ink,
+                  fontSize: 13, color: pal.ink,
                   outline: 'none',
-                  minWidth: 0,
+                  boxSizing: 'border-box',
+                }}>
+                <option value="">Pronouns (optional)</option>
+                <option value="she/her">she/her</option>
+                <option value="he/him">he/him</option>
+                <option value="they/them">they/them</option>
+                <option value="prefer not to say">prefer not to say</option>
+              </select>
+              <input
+                type="date"
+                value={dob}
+                onChange={(e) => setDob(e.target.value)}
+                placeholder="Birthday"
+                style={{
+                  flex: 1,
+                  height: 42,
+                  padding: '0 10px',
+                  background: pal.cream,
+                  border: `1px solid ${pal.line}`,
+                  borderRadius: T2.radii.md,
+                  fontFamily: 'Inter, sans-serif',
+                  fontSize: 13, color: pal.ink,
+                  outline: 'none',
+                  boxSizing: 'border-box',
                 }}
               />
-              <button
-                onClick={() => email.includes('@') && setStage('sent')}
-                disabled={!email.includes('@')}
-                style={{
-                  height: 44,
-                  padding: '0 18px',
-                  background: email.includes('@') ? pal.terracotta : pal.line,
-                  color: email.includes('@') ? pal.cream : pal.inkMute,
-                  border: 'none',
-                  borderRadius: T2.radii.pill,
-                  fontFamily: 'Inter, sans-serif',
-                  fontSize: 14, fontWeight: 600,
-                  cursor: email.includes('@') ? 'pointer' : 'not-allowed',
-                  whiteSpace: 'nowrap',
-                }}>
-                send link →
-              </button>
             </div>
-          ) : (
-            <div style={{
-              padding: 16,
-              background: 'rgba(248,245,239,0.95)',
-              backdropFilter: 'blur(14px)',
-              WebkitBackdropFilter: 'blur(14px)',
-              borderRadius: T2.radii.lg,
-              border: `1.5px solid ${pal.ink}`,
-              boxShadow: vibe === 'playful' ? `4px 4px 0 ${pal.ink}` : '0 8px 24px rgba(42,36,32,0.22)',
-              transform: vibe === 'playful' ? 'rotate(-0.5deg)' : 'none',
-            }}>
-              <div style={{
-                fontFamily: '"JetBrains Mono", monospace',
-                fontSize: 10, color: pal.sageD,
-                letterSpacing: '0.08em', textTransform: 'uppercase',
-                marginBottom: 6,
-              }}>
-                ✓ link sent
-              </div>
+
+            {error && (
               <div style={{
                 fontFamily: 'Inter, sans-serif',
-                fontSize: 17, fontWeight: 500,
-                color: pal.ink, marginBottom: 4,
-                letterSpacing: '-0.01em',
+                fontSize: 11,
+                color: pal.terracottaD,
               }}>
-                Check {email}
+                Saved locally, but couldn't reach the server.
               </div>
-              <div style={{ fontFamily: 'Inter, sans-serif', fontSize: 12, color: pal.inkSoft, marginBottom: 12 }}>
-                Tap the link from your phone to come back.
-              </div>
-              <PrimaryButton onClick={onContinue} vibe={vibe} tone="ink">
-                I clicked it →
-              </PrimaryButton>
-            </div>
-          )}
+            )}
+
+            <button
+              onClick={handleSubmit}
+              disabled={!name.trim() || saving}
+              style={{
+                width: '100%',
+                height: 46,
+                background: name.trim() ? pal.terracotta : pal.line,
+                color: name.trim() ? pal.cream : pal.inkMute,
+                border: 'none',
+                borderRadius: T2.radii.pill,
+                fontFamily: 'Inter, sans-serif',
+                fontSize: 15, fontWeight: 600,
+                cursor: name.trim() ? 'pointer' : 'default',
+              }}>
+              {saving ? 'Saving…' : 'Get started →'}
+            </button>
+          </div>
+
         </div>
       </div>
     </ScreenShell>
@@ -2166,9 +2271,36 @@ function ProfileScreen({ vibe, iconStyle, currentGroup, onLeaveGroup, onBack }) 
   const [defaults, setDefaults] = useState(['food', 'outdoors', 'arts', 'wellness']);
   const [budget, setBudget] = useState(2);
   const [distance, setDistance] = useState(5);
-  const displayName = window.PLOT_API.getDisplayName() || 'You';
+
+  // Editable profile fields — backed by the same /users/{id}/profile
+  // endpoints as the onboarding screen.
+  const localProfile = window.PLOT_API.getLocalProfile() || {};
+  const [name, setName] = useState(localProfile.name || window.PLOT_API.getDisplayName() || '');
+  const [pronouns, setPronouns] = useState(localProfile.pronouns || '');
+  const [dob, setDob] = useState(localProfile.date_of_birth || '');
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileSavedAt, setProfileSavedAt] = useState(null);
+  const displayName = name || 'You';
 
   const toggle = (id) => setDefaults((s) => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
+
+  async function handleSaveProfile() {
+    if (!name.trim() || savingProfile) return;
+    setSavingProfile(true);
+    try {
+      await window.PLOT_API.saveProfile({
+        name: name.trim(),
+        pronouns: pronouns || null,
+        date_of_birth: dob || null,
+      });
+      setProfileSavedAt(Date.now());
+    } catch (e) {
+      // Cache locally regardless so the UI doesn't lose the edit.
+      window.PLOT_API.setDisplayName(name.trim());
+    } finally {
+      setSavingProfile(false);
+    }
+  }
 
   return (
     <ScreenShell vibe={vibe} bg={pal.cream} padTop={50} padBottom={96}>
@@ -2244,6 +2376,92 @@ function ProfileScreen({ vibe, iconStyle, currentGroup, onLeaveGroup, onBack }) 
               }}>Leave</button>
           </div>
         )}
+
+        {/* Editable profile — name, pronouns, DOB. Same fields the
+            onboarding screen collected; users can update them anytime. */}
+        <SectionLabel vibe={vibe}>About you</SectionLabel>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 24 }}>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Your name"
+            maxLength={80}
+            style={{
+              width: '100%',
+              height: 44,
+              padding: '0 12px',
+              background: pal.cream,
+              border: `1px solid ${pal.line}`,
+              borderRadius: T2.radii.md,
+              fontFamily: 'Inter, sans-serif',
+              fontSize: 15, fontWeight: 500, color: pal.ink,
+              outline: 'none',
+              boxSizing: 'border-box',
+            }}
+          />
+          <div style={{ display: 'flex', gap: 8 }}>
+            <select
+              value={pronouns}
+              onChange={(e) => setPronouns(e.target.value)}
+              style={{
+                flex: 1,
+                height: 44,
+                padding: '0 10px',
+                background: pal.cream,
+                border: `1px solid ${pal.line}`,
+                borderRadius: T2.radii.md,
+                fontFamily: 'Inter, sans-serif',
+                fontSize: 13, color: pal.ink,
+                outline: 'none',
+                boxSizing: 'border-box',
+              }}>
+              <option value="">Pronouns (optional)</option>
+              <option value="she/her">she/her</option>
+              <option value="he/him">he/him</option>
+              <option value="they/them">they/them</option>
+              <option value="prefer not to say">prefer not to say</option>
+            </select>
+            <input
+              type="date"
+              value={dob}
+              onChange={(e) => setDob(e.target.value)}
+              placeholder="Birthday"
+              style={{
+                flex: 1,
+                height: 44,
+                padding: '0 10px',
+                background: pal.cream,
+                border: `1px solid ${pal.line}`,
+                borderRadius: T2.radii.md,
+                fontFamily: 'Inter, sans-serif',
+                fontSize: 13, color: pal.ink,
+                outline: 'none',
+                boxSizing: 'border-box',
+              }}
+            />
+          </div>
+          <button
+            onClick={handleSaveProfile}
+            disabled={!name.trim() || savingProfile}
+            style={{
+              alignSelf: 'flex-start',
+              padding: '8px 16px',
+              borderRadius: T2.radii.pill,
+              border: `1.5px solid ${pal.ink}`,
+              background: profileSavedAt && Date.now() - profileSavedAt < 2000 ? pal.sage : pal.cream,
+              color: profileSavedAt && Date.now() - profileSavedAt < 2000 ? pal.cream : pal.ink,
+              fontFamily: 'Inter, sans-serif',
+              fontSize: 13, fontWeight: 600,
+              cursor: name.trim() ? 'pointer' : 'default',
+            }}>
+            {savingProfile
+              ? 'Saving…'
+              : profileSavedAt && Date.now() - profileSavedAt < 2000
+                ? '✓ Saved'
+                : 'Save'}
+          </button>
+        </div>
 
         <SectionLabel vibe={vibe}>Default categories</SectionLabel>
         <div style={{

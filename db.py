@@ -71,9 +71,15 @@ CREATE TABLE IF NOT EXISTS users (
     default_budget  TEXT DEFAULT 'medium',        -- low / medium / high
     default_categories TEXT[] DEFAULT '{}',       -- e.g. {Food & Drink, Outdoors}
     default_max_distance_km FLOAT DEFAULT 5.0,
+    date_of_birth   DATE,
+    pronouns        TEXT,                         -- 'she/her', 'he/him', 'they/them', or custom
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Migrations for users table when columns were added later (idempotent).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS date_of_birth DATE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS pronouns TEXT;
 
 -- Log every /recommend call (for analytics and retraining feature engineering)
 CREATE TABLE IF NOT EXISTS recommendation_log (
@@ -235,6 +241,36 @@ def upsert_user(
                 ),
             )
         conn.commit()
+
+
+def save_user_profile(
+    user_id: str,
+    name: str | None = None,
+    pronouns: str | None = None,
+    date_of_birth: str | None = None,
+) -> dict[str, Any]:
+    """
+    Insert or update the profile fields the onboarding screen collects.
+    Keeps existing default_* prefs untouched (they're only set later by
+    /recommend's upsert_user call). Returns the resulting row.
+    """
+    sql = """
+        INSERT INTO users (user_id, name, pronouns, date_of_birth, updated_at)
+        VALUES (%s, %s, %s, %s, NOW())
+        ON CONFLICT (user_id) DO UPDATE SET
+            name           = COALESCE(EXCLUDED.name, users.name),
+            pronouns       = COALESCE(EXCLUDED.pronouns, users.pronouns),
+            date_of_birth  = COALESCE(EXCLUDED.date_of_birth, users.date_of_birth),
+            updated_at     = NOW()
+        RETURNING user_id, name, email, pronouns, date_of_birth,
+                  default_budget, default_categories, default_max_distance_km,
+                  created_at, updated_at;
+    """
+    with _get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(sql, (user_id, name, pronouns, date_of_birth))
+        row = cur.fetchone()
+        conn.commit()
+    return dict(row) if row else {}
 
 
 def get_user(user_id: str) -> dict[str, Any] | None:

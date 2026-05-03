@@ -46,11 +46,13 @@ try:
         create_group,
         get_group,
         get_group_by_token,
+        get_user,
         join_group,
         list_user_groups,
         log_feedback,
         log_recommendation_request,
         record_group_vote,
+        save_user_profile,
         set_member_prefs,
         update_group_last_rec,
         upsert_user,
@@ -180,6 +182,15 @@ class EventsResponse(BaseModel):
     days_ahead: int
     events_found: int
     events: list[EventResult]
+
+
+class UserProfileRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+    pronouns: str | None = Field(default=None, max_length=40)
+    date_of_birth: str | None = Field(
+        default=None,
+        description="ISO 8601 date string (YYYY-MM-DD), or None to leave unset.",
+    )
 
 
 class CreateGroupRequest(BaseModel):
@@ -969,6 +980,61 @@ def groups_vote(group_id: str, request: GroupVoteRequest):
         return {"status": "ok", "vote_id": vote_id, "rec_id": g["last_rec_id"]}
     except Exception as exc:
         logger.exception("record_group_vote failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"DB write failed: {exc}") from exc
+
+
+@app.get("/users/{user_id}/profile")
+def users_profile_get(user_id: str):
+    """
+    Fetch a user's profile (name, pronouns, date_of_birth, etc).
+    Returns a sparse object — fields the user hasn't filled in are null.
+    Used by the Onboarding flow to detect "first launch" (200 with all-null
+    profile fields) vs "returning" (200 with at least name set).
+    """
+    _require_db()
+    u = get_user(user_id)
+    if not u:
+        # Treat unknown user as empty profile — onboarding will prompt
+        # and a subsequent PUT creates the row.
+        return {
+            "user_id": user_id,
+            "name": None, "pronouns": None, "date_of_birth": None,
+        }
+    return {
+        "user_id": u["user_id"],
+        "name": u.get("name"),
+        "pronouns": u.get("pronouns"),
+        "date_of_birth": u["date_of_birth"].isoformat() if u.get("date_of_birth") else None,
+        "default_budget": u.get("default_budget"),
+        "default_categories": u.get("default_categories") or [],
+        "default_max_distance_km": u.get("default_max_distance_km"),
+    }
+
+
+@app.put("/users/{user_id}/profile")
+def users_profile_put(user_id: str, request: UserProfileRequest):
+    """
+    Onboarding / profile-edit save. Upserts name + pronouns + DOB on the
+    users row. Doesn't touch the user's default prefs (those get set when
+    they first hit /recommend, via upsert_user).
+    """
+    _require_db()
+    try:
+        row = save_user_profile(
+            user_id=user_id,
+            name=request.name,
+            pronouns=request.pronouns,
+            date_of_birth=request.date_of_birth,
+        )
+        return {
+            "user_id": row.get("user_id", user_id),
+            "name": row.get("name"),
+            "pronouns": row.get("pronouns"),
+            "date_of_birth": row["date_of_birth"].isoformat()
+                if row.get("date_of_birth") else None,
+        }
+    except Exception as exc:
+        logger.exception("save_user_profile failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"DB write failed: {exc}") from exc
 
 

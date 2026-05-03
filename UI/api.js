@@ -180,6 +180,48 @@ window.PLOT_API = (function () {
     return call('GET', `/users/${encodeURIComponent(getUserId())}/groups`);
   }
 
+  // ── User profile (name, pronouns, DOB) ───────────────────────────
+  // For the demo we don't have real auth — identity is the localStorage
+  // user_id. The profile fields below are stored on the `users` table
+  // server-side AND mirrored in localStorage so the UI is responsive
+  // without a round-trip.
+  const PROFILE_KEY = 'plot_profile_v1';
+
+  function getLocalProfile() {
+    try {
+      const raw = localStorage.getItem(PROFILE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+
+  function _saveLocalProfile(p) {
+    try { localStorage.setItem(PROFILE_KEY, JSON.stringify(p)); } catch (e) { /* ignore */ }
+  }
+
+  function fetchProfile() {
+    return call('GET', `/users/${encodeURIComponent(getUserId())}/profile`);
+  }
+
+  async function saveProfile({ name, pronouns, date_of_birth }) {
+    const body = {
+      name: (name || '').trim(),
+      pronouns: pronouns || null,
+      date_of_birth: date_of_birth || null,
+    };
+    const res = await call('PUT', `/users/${encodeURIComponent(getUserId())}/profile`, body);
+    // Cache locally so the next launch can boot straight to Home/Prefs
+    // without waiting on the network.
+    _saveLocalProfile({
+      name: res.name || body.name,
+      pronouns: res.pronouns || body.pronouns,
+      date_of_birth: res.date_of_birth || body.date_of_birth,
+    });
+    // Also update the existing display-name cache so JoinGroup/CreateGroup
+    // pre-fill correctly.
+    if (res.name) setDisplayName(res.name);
+    return res;
+  }
+
   // ── currentGroup (the group the user is actively planning in) ────
   // Stored in localStorage so a refresh keeps you in your group rather
   // than dumping you back to the solo flow.
@@ -331,5 +373,9 @@ window.PLOT_API = (function () {
     clearCurrentGroup,
     getDisplayName,
     setDisplayName,
+    // Profile (name, pronouns, DOB)
+    getLocalProfile,
+    fetchProfile,
+    saveProfile,
   };
 })();
