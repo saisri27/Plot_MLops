@@ -239,10 +239,42 @@ function PlotApp() {
     setScreen('prefs');
   }
 
+  // Wipe everything that's tied to the previous group so the next group's
+  // polled state, recs, and votes don't bleed over. Used by both
+  // handleSwitchGroup and handleLeaveGroup.
+  function _clearGroupSessionState() {
+    setLobbyState(null);
+    setVotes({});
+    setRecState({
+      loading: false, error: null, venues: [], events: [],
+      rec_id: null, used_llm: false, llm_model: null,
+      llm_latency_ms: null, last_prefs: null,
+      pool_offset: 0,
+    });
+    lastSeenRecIdRef.current = null;
+  }
+
+  // HomeScreen tapped one of the user's groups. Switch the active group
+  // (this is the bug-fix: previously onOpenGroup just navigated, so prefs/
+  // votes silently fired against whichever group was active before),
+  // wipe stale state, then route into the prefs flow.
+  function handleSwitchGroup(group) {
+    if (!group || !group.id) {
+      setScreen('prefs');
+      return;
+    }
+    if (!currentGroup || currentGroup.id !== group.id) {
+      _clearGroupSessionState();
+      setCurrentGroup(group);
+    }
+    setScreen('prefs');
+  }
+
   // Profile / Home → "leave group" returns to solo mode. We don't delete
   // the group server-side (other members keep planning); just clear our
-  // local context.
+  // local context AND any stale per-group state.
   function handleLeaveGroup() {
+    _clearGroupSessionState();
     setCurrentGroup(null);
     setScreen('home');
   }
@@ -301,7 +333,7 @@ function PlotApp() {
     switch (screen) {
       case 'auth':     return <AuthScreen {...props} onContinue={() => setScreen('home')} />;
       case 'join':     return <JoinGroupScreen {...props} token={pendingInviteToken} onBack={() => setScreen('home')} onJoined={handleJoinedGroup} />;
-      case 'home':     return <HomeScreen {...props} currentGroup={currentGroup} onOpenGroup={() => setScreen('prefs')} onCreate={() => setScreen('create')} onProfile={() => setScreen('profile')} />;
+      case 'home':     return <HomeScreen {...props} currentGroup={currentGroup} onOpenGroup={handleSwitchGroup} onCreate={() => setScreen('create')} onProfile={() => setScreen('profile')} />;
       case 'create':   return <CreateGroupScreen {...props} onBack={() => setScreen('home')} onCreated={handleCreatedGroup} />;
       case 'prefs':    return <SetPrefsScreen {...props} currentGroup={currentGroup} onBack={() => setScreen('home')} onSubmit={handleSubmitPrefs} />;
       case 'lobby':    return <WaitingRoomScreen {...props} currentGroup={currentGroup} lobbyState={lobbyState} onTriggerRecs={handleGroupRecsTrigger} onBack={() => setScreen('prefs')} loading={recState.loading} />;
