@@ -40,12 +40,18 @@ from recommendation_bigquery import (  # noqa: E402
 # to the names this module reads at call time.
 import llm_rerank  # noqa: E402
 import llm_intent  # noqa: E402
+import ranker  # noqa: E402
+
+# Load the trained ranker once at startup. (None, None, None) when no model
+# file is on disk or load fails — _score_and_rank then falls back to v0.
+RANKER_MODEL, RANKER_RUN_ID, RANKER_MODEL_VERSION = ranker.load_ranker()
 
 try:
     from db import (  # noqa: E402
         create_group,
         get_group,
         get_group_by_token,
+        get_llm_cost_summary,
         get_user,
         join_group,
         list_user_groups,
@@ -389,12 +395,33 @@ def _score_and_rank(
     merged_budget: str,
     merged_max_distance: float,
     category_weights: dict[str, float],
+    group_size: int = 1,
+    all_categories: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """v0 weighted-score every venue, attach `score` + `reason`, sort desc."""
+    """
+    v0-score every venue (attaches `score` + `reason`), then sort desc. If a
+    trained ranker is loaded (`RANKER_MODEL` is not None), sort by its
+    yay-probability instead — but each venue's `score` field stays as the v0
+    score so retraining keeps reading a stable feature and the UI keeps
+    showing a consistent signal.
+    """
     scored: list[dict[str, Any]] = []
     for venue in venues:
         score, reason = compute_score(venue, merged_budget, merged_max_distance, category_weights)
         scored.append({**venue, "score": score, "reason": reason})
+
+    if RANKER_MODEL is not None:
+        merged_for_ranker = {
+            "merged_budget": merged_budget,
+            "merged_max_distance": merged_max_distance,
+            "all_categories": all_categories or list(category_weights.keys()),
+        }
+        proba = ranker.score_candidates(RANKER_MODEL, scored, merged_for_ranker, group_size)
+        if proba is not None and len(proba) == len(scored):
+            for v, p in zip(scored, proba, strict=True):
+                v["_ml_score"] = float(p)
+            return sorted(scored, key=lambda v: v["_ml_score"], reverse=True)
+
     return sorted(scored, key=lambda v: v["score"], reverse=True)
 
 
@@ -530,7 +557,29 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"status": "healthy", "db_available": DB_AVAILABLE}
+    return {
+        "status": "healthy",
+        "db_available": DB_AVAILABLE,
+        "ranker_model_version": RANKER_MODEL_VERSION,
+    }
+
+
+@app.get("/admin/llm-cost")
+def admin_llm_cost(days: int = 7):
+    """
+    Aggregate LLM cost + latency for the last N days, plus a daily series and a
+    breakdown by model_version. Used to watch for unexpected cost spikes or
+    drift after a model/prompt change. Requires DATABASE_URL.
+    """
+    if not DB_AVAILABLE:
+        raise HTTPException(status_code=503, detail="DB not configured.")
+    if days < 1 or days > 365:
+        raise HTTPException(status_code=400, detail="days must be in [1, 365].")
+    try:
+        return get_llm_cost_summary(days=days)
+    except Exception as exc:
+        logger.exception("get_llm_cost_summary failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Cost query failed: {exc}") from exc
 
 
 @app.post("/recommend", response_model=RecommendResponse)
@@ -598,18 +647,29 @@ def recommend(request: RecommendRequest):
             recommendations=[],
         )
 
-    # 3-4. Score, rank, take v0 top-N as LLM candidate set
-    ranked = _score_and_rank(venues, merged_budget, merged_max_distance, merged["category_weights"])
+    # 3-4. Score, rank, take top-N as LLM candidate set
+    ranked = _score_and_rank(
+        venues,
+        merged_budget,
+        merged_max_distance,
+        merged["category_weights"],
+        group_size=len(request.users),
+        all_categories=all_categories,
+    )
     candidates = ranked[:TOP_N_FOR_LLM]
 
     # 5. LLM rerank (with full v0 fallback)
     outcome = _run_llm_rerank(candidates, merged, len(request.users), request.top_k)
 
     # The model_version stamped on the recommendation_log row reflects what
-    # actually ranked the final list — not just what scored the candidates.
-    effective_model_version = (
-        f"{outcome.llm_model}+{outcome.prompt_version}" if outcome.used_llm else "rules_v1"
-    )
+    # actually ranked the final list. LLM tag wins when LLM ran; otherwise
+    # use the trained-ranker tag if loaded; else v0 ("rules_v1").
+    if outcome.used_llm:
+        effective_model_version = f"{outcome.llm_model}+{outcome.prompt_version}"
+    elif RANKER_MODEL_VERSION:
+        effective_model_version = RANKER_MODEL_VERSION
+    else:
+        effective_model_version = "rules_v1"
 
     # 6. DB log (best-effort, returns None on any failure)
     rec_id = _log_recommend_best_effort(

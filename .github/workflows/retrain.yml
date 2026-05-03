@@ -1,0 +1,75 @@
+name: Weekly retrain (ranker v1)
+
+# Builds a fresh training CSV from Supabase, retrains the GBT ranker, then
+# uploads the new .joblib + the training CSV as a GitHub Release asset.
+# Cloud Run does NOT auto-pick up the new model — promote manually by
+# rebuilding the Docker image (the Dockerfile copies models/ at build time).
+#
+# Schedule: Monday 07:00 UTC. Manual runs via "Run workflow" in the Actions tab.
+#
+# Required GH Actions secret:
+#   DATABASE_URL  — Supabase pooler connection string (same value as local .env)
+
+on:
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write  # needed to create Releases + push tags
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build training data from Supabase
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python build_training_data.py
+
+      - name: Train ranker
+        run: python notebooks/train_ranker.py | tee train_log.txt
+
+      # Surface NDCG@5 (v1 vs v0 baseline) in the run summary so a human can
+      # decide whether to promote the new model.
+      - name: Summarize training metrics
+        if: always()
+        run: |
+          {
+            echo "## Ranker retrain summary"
+            echo ""
+            echo '```'
+            grep -E "NDCG@|ROC-AUC|Training rows|Model saved|MLflow run id" train_log.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Tag based on the ISO week so each weekly retrain gets a unique release.
+      - name: Compute release tag
+        id: tag
+        run: echo "tag=ranker-$(date -u +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
+
+      - name: Publish .joblib + CSV as Release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "Ranker ${{ steps.tag.outputs.tag }}"
+          body_path: train_log.txt
+          files: |
+            models/plot_ranker_*.joblib
+            training_data/plot_training_latest.csv
+          fail_on_unmatched_files: true

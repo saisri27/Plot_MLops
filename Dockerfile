@@ -27,9 +27,14 @@ RUN pip install -r requirements.txt
 
 # Copy only what the API needs — keep the image small and avoid baking any
 # training data, notebooks, .env, or local secrets.
-COPY decision_engine.py llm_rerank.py llm_intent.py \
+COPY decision_engine.py llm_rerank.py llm_intent.py ranker.py \
      recommendation_bigquery.py db.py categories.py ./
 COPY prompts/ prompts/
+
+# The trained ranker. The retrain workflow publishes new .joblibs to GitHub
+# Releases; download the latest one into ./models/ before `gcloud builds
+# submit`, or skip and the API will fall back to the v0 heuristic.
+COPY models/ models/
 
 EXPOSE 8080
 

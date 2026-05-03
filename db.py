@@ -456,6 +456,73 @@ def get_training_join() -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def get_llm_cost_summary(days: int = 7) -> dict[str, Any]:
+    """
+    Roll up recommendation_log over the last `days` for the /admin/llm-cost
+    endpoint. Returns totals, a per-day series, and a per-model_version
+    breakdown so a human can spot cost trends and which model is driving them.
+    """
+    days = max(1, min(int(days), 365))
+
+    totals_sql = """
+        SELECT
+            COUNT(*)::int                                  AS request_count,
+            COUNT(llm_cost_usd)::int                       AS llm_request_count,
+            COALESCE(SUM(llm_cost_usd), 0)::float          AS total_cost_usd,
+            COALESCE(AVG(llm_cost_usd), 0)::float          AS avg_cost_usd,
+            COALESCE(
+                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY llm_latency_ms),
+                0
+            )::float                                       AS p50_latency_ms,
+            COALESCE(
+                PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY llm_latency_ms),
+                0
+            )::float                                       AS p95_latency_ms
+        FROM recommendation_log
+        WHERE created_at >= NOW() - (%s || ' days')::interval;
+    """
+    daily_sql = """
+        SELECT
+            DATE_TRUNC('day', created_at)::date            AS day,
+            COUNT(*)::int                                  AS request_count,
+            COALESCE(SUM(llm_cost_usd), 0)::float          AS cost_usd
+        FROM recommendation_log
+        WHERE created_at >= NOW() - (%s || ' days')::interval
+        GROUP BY 1
+        ORDER BY 1;
+    """
+    by_model_sql = """
+        SELECT
+            COALESCE(model_version, 'unknown')             AS model_version,
+            COUNT(*)::int                                  AS request_count,
+            COALESCE(SUM(llm_cost_usd), 0)::float          AS cost_usd,
+            COALESCE(AVG(llm_cost_usd), 0)::float          AS avg_cost_usd
+        FROM recommendation_log
+        WHERE created_at >= NOW() - (%s || ' days')::interval
+        GROUP BY 1
+        ORDER BY cost_usd DESC;
+    """
+
+    with _get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(totals_sql, (str(days),))
+        totals = dict(cur.fetchone() or {})
+        cur.execute(daily_sql, (str(days),))
+        daily = [dict(r) for r in cur.fetchall()]
+        cur.execute(by_model_sql, (str(days),))
+        by_model = [dict(r) for r in cur.fetchall()]
+
+    for row in daily:
+        if row.get("day") is not None:
+            row["day"] = row["day"].isoformat()
+
+    return {
+        "window_days": days,
+        "totals": totals,
+        "daily": daily,
+        "by_model_version": by_model,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Groups: shareable-link multi-user sessions
 # ---------------------------------------------------------------------------
