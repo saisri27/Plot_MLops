@@ -998,7 +998,9 @@ def users_profile_get(user_id: str):
         # and a subsequent PUT creates the row.
         return {
             "user_id": user_id,
-            "name": None, "pronouns": None, "date_of_birth": None,
+            "name": None,
+            "pronouns": None,
+            "date_of_birth": None,
         }
     return {
         "user_id": u["user_id"],
@@ -1030,8 +1032,7 @@ def users_profile_put(user_id: str, request: UserProfileRequest):
             "user_id": row.get("user_id", user_id),
             "name": row.get("name"),
             "pronouns": row.get("pronouns"),
-            "date_of_birth": row["date_of_birth"].isoformat()
-                if row.get("date_of_birth") else None,
+            "date_of_birth": row["date_of_birth"].isoformat() if row.get("date_of_birth") else None,
         }
     except Exception as exc:
         logger.exception("save_user_profile failed: %s", exc)

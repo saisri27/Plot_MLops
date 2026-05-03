@@ -41,7 +41,25 @@ window.PLOT_API = (function () {
     Object.entries(ID_TO_API_NAME).map(([id, name]) => [name, id])
   );
 
-  // ── localStorage user_id (no auth) ───────────────────────────────
+  // ── localStorage user_id ─────────────────────────────────────────
+  // Two paths:
+  //   * Signed-in session  → user_id is deterministically derived from
+  //     the email. Same email anywhere → same identity → same groups,
+  //     votes, memories. This is what makes "sign in with my credentials
+  //     on a different phone" actually carry your data over.
+  //   * No session yet      → fall back to a random per-browser id so
+  //     the boot path (which fires before AuthScreen) still has *some*
+  //     user_id to call APIs with. The deterministic one overwrites it
+  //     the moment the user signs in.
+  function _emailToUserId(email) {
+    const norm = (email || '').trim().toLowerCase();
+    if (!norm) return null;
+    // Stable, non-cryptographic — we don't need security here, just
+    // determinism. Replace anything non-alphanumeric with underscore
+    // so the id stays URL/path-safe for /users/{id}/profile.
+    return 'u_' + norm.replace(/[^a-z0-9]/g, '_').slice(0, 40);
+  }
+
   function getUserId() {
     let id = localStorage.getItem('plot_user_id');
     if (!id) {
@@ -196,16 +214,33 @@ window.PLOT_API = (function () {
   }
 
   function setSession(email) {
+    const trimmed = (email || '').trim().toLowerCase();
     try {
       localStorage.setItem(SESSION_KEY, JSON.stringify({
-        email: (email || '').trim().toLowerCase(),
+        email: trimmed,
         signed_in_at: new Date().toISOString(),
       }));
+      // Replace the per-browser random user_id with one deterministically
+      // derived from this email so signing in on a different device with
+      // the same email lands on the same identity. Pre-auth random-id
+      // data (memories, groups created without signing in) is orphaned —
+      // same as it would be under real auth.
+      const derived = _emailToUserId(trimmed);
+      if (derived) localStorage.setItem('plot_user_id', derived);
+      // Drop any stale local profile so a different email doesn't reuse
+      // the previous session's name/pronouns/avatar. The next ProfileSetup
+      // pass will rebuild it from /users/{id}/profile or fresh inputs.
+      try { localStorage.removeItem('plot_profile_v1'); } catch (e) { /* ignore */ }
     } catch (e) { /* ignore */ }
   }
 
   function clearSession() {
     try { localStorage.removeItem(SESSION_KEY); } catch (e) { /* ignore */ }
+    // Also drop the email-derived user_id and the local profile cache
+    // so signing back in with a different email doesn't inherit the
+    // previous user's identity or name.
+    try { localStorage.removeItem('plot_user_id'); } catch (e) { /* ignore */ }
+    try { localStorage.removeItem('plot_profile_v1'); } catch (e) { /* ignore */ }
   }
 
   function getEmail() {
