@@ -664,8 +664,148 @@ function PrimaryButton({ children, onClick, disabled = false, vibe = 'editorial'
   );
 }
 
+// ─────────────────────────────────────────────────────────────
+// Bottom navigation — persistent tab bar shown on the "destination"
+// screens (Home / Memories / Profile). Hidden on mid-flow screens
+// (Auth / Join / Create / SetPrefs / Lobby / Recs / Decision) where
+// the screen-level action button lives at the bottom and would
+// compete with this. Tab icons are simple inline SVGs styled to the
+// rest of the design system.
+// ─────────────────────────────────────────────────────────────
+function BottomNav({ active, onChange, vibe = 'editorial' }) {
+  const pal = T.palette;
+  const tabs = [
+    { id: 'home',     label: 'Plans',    icon: NavPlansIcon },
+    { id: 'create',   label: 'New',      icon: NavPlusIcon, accent: true },
+    { id: 'memories', label: 'Memories', icon: NavMemoriesIcon },
+    { id: 'profile',  label: 'You',      icon: NavYouIcon },
+  ];
+  return (
+    <nav style={{
+      position: 'absolute',
+      left: 0, right: 0, bottom: 0,
+      // Sit above the iOS home-indicator safe area on the real device.
+      paddingBottom: 'calc(8px + env(safe-area-inset-bottom, 0px))',
+      paddingTop: 8,
+      background: pal.cream,
+      borderTop: `1px solid ${pal.line}`,
+      display: 'flex',
+      justifyContent: 'space-around',
+      alignItems: 'flex-end',
+      zIndex: 10,
+      boxShadow: '0 -4px 12px rgba(42, 36, 32, 0.04)',
+    }}>
+      {tabs.map((t) => {
+        const isActive = active === t.id;
+        const Icon = t.icon;
+        const accent = !!t.accent;
+        return (
+          <button
+            key={t.id}
+            onClick={() => onChange(t.id)}
+            aria-label={t.label}
+            aria-current={isActive ? 'page' : undefined}
+            style={{
+              flex: 1,
+              padding: '6px 4px 8px',
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 4,
+              color: pal.ink,
+              fontFamily: 'Inter, sans-serif',
+              WebkitTapHighlightColor: 'transparent',
+            }}>
+            {accent ? (
+              // The "+" tab is rendered as a filled terracotta circle —
+              // the standard center-action pattern from Instagram/Tinder.
+              // Stays at the same size whether active or not so it always
+              // reads as the primary CTA on the bar.
+              <div style={{
+                width: 44, height: 44,
+                borderRadius: '50%',
+                background: pal.terracotta,
+                color: pal.cream,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: vibe === 'playful'
+                  ? `2px 2px 0 ${pal.ink}`
+                  : '0 4px 10px rgba(194, 90, 60, 0.32)',
+              }}>
+                <Icon size={22} color={pal.cream} />
+              </div>
+            ) : (
+              <div style={{
+                width: 30, height: 30,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: isActive ? pal.terracotta : pal.inkMute,
+                transition: 'color 120ms',
+              }}>
+                <Icon size={22} color={isActive ? pal.terracotta : pal.inkMute} />
+              </div>
+            )}
+            <span style={{
+              fontSize: 10,
+              fontWeight: 600,
+              letterSpacing: '0.02em',
+              color: accent
+                ? pal.terracotta
+                : isActive ? pal.terracotta : pal.inkMute,
+            }}>{t.label}</span>
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+// Tiny inline nav icons. Kept here (not in icons.jsx) because they're
+// purely structural — different vocabulary from the category icons.
+function NavPlansIcon({ size = 22, color = 'currentColor' }) {
+  // Stack of two cards = your plans/groups list.
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
+      <rect x="4" y="6" width="14" height="11" rx="2" stroke={color} strokeWidth="1.7" />
+      <rect x="7" y="3" width="14" height="11" rx="2" stroke={color} strokeWidth="1.7" fill="none" />
+    </svg>
+  );
+}
+function NavPlusIcon({ size = 22, color = 'currentColor' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
+      <path d="M12 5 L12 19 M5 12 L19 12" stroke={color} strokeWidth="2.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+function NavMemoriesIcon({ size = 22, color = 'currentColor' }) {
+  // A photo card with a small mountain peak + sun — the "memory" abstraction.
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="2" stroke={color} strokeWidth="1.7" />
+      <circle cx="8" cy="9" r="1.5" fill={color} />
+      <path d="M5 16 L10 11 L13 14 L16 11 L19 14" stroke={color} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+function NavYouIcon({ size = 22, color = 'currentColor' }) {
+  // Head + shoulders silhouette.
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
+      <circle cx="12" cy="9" r="3.5" stroke={color} strokeWidth="1.7" />
+      <path d="M5 19 C5 15.5 8 13.5 12 13.5 C16 13.5 19 15.5 19 19" stroke={color} strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 // Export to window
 Object.assign(window, {
   StripedPlaceholder, IconChip, YayNahhButtons, VenueCard,
   VibeInput, BudgetChip, DistanceSlider, Avatar, SectionLabel, PrimaryButton,
+  BottomNav,
 });

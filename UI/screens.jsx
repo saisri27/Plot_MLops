@@ -816,7 +816,7 @@ function HomeScreen({ vibe, currentGroup, onOpenGroup, onCreate, onProfile }) {
   }
 
   return (
-    <ScreenShell vibe={vibe} bg={pal.cream} padTop={50}>
+    <ScreenShell vibe={vibe} bg={pal.cream} padTop={50} padBottom={96}>
       {/* Top bar */}
       <div style={{
         display: 'flex',
@@ -1980,7 +1980,7 @@ function MemoriesScreen({ vibe, onBack }) {
   }
 
   return (
-    <ScreenShell vibe={vibe} bg={pal.cream} padTop={50}>
+    <ScreenShell vibe={vibe} bg={pal.cream} padTop={50} padBottom={96}>
       <div style={{ padding: '8px 24px 0', display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
         <button onClick={onBack} style={{
           background: 'transparent', border: 'none', cursor: 'pointer',
@@ -2171,7 +2171,7 @@ function ProfileScreen({ vibe, iconStyle, currentGroup, onLeaveGroup, onBack }) 
   const toggle = (id) => setDefaults((s) => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
 
   return (
-    <ScreenShell vibe={vibe} bg={pal.cream} padTop={50}>
+    <ScreenShell vibe={vibe} bg={pal.cream} padTop={50} padBottom={96}>
       <div style={{ padding: '8px 24px 0', display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
         <button onClick={onBack} style={{
           background: 'transparent', border: 'none', cursor: 'pointer',

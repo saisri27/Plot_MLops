@@ -307,7 +307,7 @@ function PlotApp() {
       case 'lobby':    return <WaitingRoomScreen {...props} currentGroup={currentGroup} lobbyState={lobbyState} onTriggerRecs={handleGroupRecsTrigger} onBack={() => setScreen('prefs')} loading={recState.loading} />;
       case 'recs':     return <RecsScreen {...props} currentGroup={currentGroup} recState={recState} lobbyState={lobbyState} votes={votes} setVotes={setVotes} onShuffle={handleShuffle} onBack={() => setScreen(currentGroup ? 'lobby' : 'prefs')} onLockedIn={() => setScreen('decision')} />;
       case 'decision': return <GroupDecisionScreen {...props} currentGroup={currentGroup} lobbyState={lobbyState} recState={recState} votes={votes} onBack={() => setScreen('recs')} onMemories={() => setScreen('memories')} onWentThere={handleWentThere} />;
-      case 'memories': return <MemoriesScreen {...props} onBack={() => setScreen('decision')} />;
+      case 'memories': return <MemoriesScreen {...props} onBack={() => setScreen('home')} />;
       case 'profile':  return <ProfileScreen {...props} currentGroup={currentGroup} onLeaveGroup={handleLeaveGroup} onBack={() => setScreen('home')} />;
       default: return null;
     }
@@ -342,8 +342,21 @@ function PlotApp() {
         {/* Phone */}
         <div data-screen-label={SCREENS.find(s => s.id === screen)?.label || screen}>
           <IOSDevice width={375} height={812}>
-            <div style={{ width: '100%', height: '100%' }}>
+            <div style={{ width: '100%', height: '100%', position: 'relative' }}>
               {screenEl}
+              {/* Persistent bottom-tab nav — only on the "destination"
+                  screens (Home / Memories / Profile). Hidden on transactional
+                  flows where the screen-level action button owns the bottom. */}
+              {['home', 'memories', 'profile'].includes(screen) && (
+                <BottomNav
+                  active={screen}
+                  vibe={tweaks.vibe}
+                  onChange={(tab) => {
+                    if (tab === 'create') setScreen('create');
+                    else setScreen(tab);
+                  }}
+                />
+              )}
             </div>
           </IOSDevice>
         </div>
