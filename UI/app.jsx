@@ -27,7 +27,10 @@ function PlotApp() {
   // Boot screen routing — three-stage check:
   //   1. No session (not signed in) → AuthScreen (email + password).
   //   2. Signed in but no profile name yet → ProfileSetupScreen.
-  //   3. Otherwise → wherever the URL / saved group context says.
+  //   3. Otherwise → wherever the URL says, with Home as the default.
+  // Home is the right landing page even for first-timers without a group:
+  // it shows an empty-state CTA to create one. Solo SetPrefs is reachable
+  // by tapping "+ New" in the bottom nav once the user knows the app.
   const [screen, setScreen] = useState(() => {
     const params = new URLSearchParams(window.location.search);
     const session = window.PLOT_API.getSession();
@@ -35,7 +38,7 @@ function PlotApp() {
     const profile = window.PLOT_API.getLocalProfile();
     if (!(profile && profile.name)) return 'profile-setup';
     if (params.get('join')) return 'join';
-    return window.PLOT_API.getCurrentGroup() ? 'home' : 'prefs';
+    return 'home';
   });
   const [votes, setVotes] = useState({});
 
@@ -72,11 +75,12 @@ function PlotApp() {
     last_prefs: null,
   });
 
-  // We pull a small pool from the LLM than we show so the user can
-  // "Shuffle" through different picks without a fresh /recommend round-trip.
-  // Pool=8 keeps the first call fast (~6–8 s) while still supporting one
-  // shuffle round (cards 6-8 plus 2 from a fresh refetch).
-  const RECS_POOL_SIZE = 8;
+  // Pull more from the LLM than we show so "↻ Shuffle" can rotate to a
+  // fresh five without a network round-trip. Pool=10 gives one full
+  // shuffle pass (cards 1-5 → cards 6-10) before we have to refetch.
+  // Warm latency is ~9–11 s for top_k=10, well inside the 25 s api.js
+  // timeout we set earlier.
+  const RECS_POOL_SIZE = 10;
   const RECS_VISIBLE = 5;
 
   // Group lobby state — what every member's phone polls. The lobby screen
@@ -362,20 +366,19 @@ function PlotApp() {
     switch (screen) {
       case 'auth':     return <AuthScreen {...props} onContinue={() => {
         // After signing in / signing up: if this user hasn't filled in
-        // their profile yet, go to ProfileSetup. Otherwise route by
-        // URL / group state.
+        // their profile yet, go to ProfileSetup. Otherwise drop them on
+        // Home (or Join, if the URL had an invite token).
         const profile = window.PLOT_API.getLocalProfile();
         if (!(profile && profile.name)) { setScreen('profile-setup'); return; }
         if (pendingInviteToken) setScreen('join');
-        else if (currentGroup) setScreen('home');
-        else setScreen('prefs');
+        else setScreen('home');
       }} />;
       case 'profile-setup': return <ProfileSetupScreen {...props} onContinue={() => {
         // After the user fills in name / pronouns / DOB / avatar, drop
-        // them into wherever the URL / group state says they should be.
+        // them on Home — that's the proper landing screen with the
+        // bottom nav so they can pick what to do next.
         if (pendingInviteToken) setScreen('join');
-        else if (currentGroup) setScreen('home');
-        else setScreen('prefs');
+        else setScreen('home');
       }} />;
       case 'join':     return <JoinGroupScreen {...props} token={pendingInviteToken} onBack={() => setScreen('home')} onJoined={handleJoinedGroup} />;
       case 'home':     return <HomeScreen {...props} currentGroup={currentGroup} onOpenGroup={handleSwitchGroup} onCreate={() => setScreen('create')} onProfile={() => setScreen('profile')} />;
