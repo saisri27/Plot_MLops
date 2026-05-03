@@ -20,6 +20,8 @@ from typing import Any
 
 from google.cloud import bigquery
 
+from categories import ALLOWED_SET as _ALLOWED_CATEGORY_SET
+
 # Align with Data_scraping pipelines and INFRASTRUCTURE.md
 GCP_PROJECT = os.environ.get("GCP_PROJECT", "mlops-project-491402").strip()
 BQ_DATASET = os.environ.get("BQ_DATASET", "places_raw").strip()
@@ -37,6 +39,42 @@ def _events_fqn() -> str:
 
 def _bq_client() -> bigquery.Client:
     return bigquery.Client(project=GCP_PROJECT)
+
+
+# Ticketmaster's segment taxonomy is coarser than our user-facing 11 categories.
+# Music gets its own chip ("Music & Live Shows") because it's 51% of upcoming
+# event volume — collapsing it into Entertainment hid the signal.
+# Anything not mapped (Undefined, Miscellaneous, NULL) is bucketed to
+# Entertainment so users still see those events under at least one chip;
+# previously they were unreachable. Tune this mapping when we add a
+# "Family"/"Film" feed.
+SEGMENT_TO_CATEGORY: dict[str, str] = {
+    "Music": "Music & Live Shows",
+    "Arts & Theatre": "Arts & Culture",
+    "Sports": "Sports & Recreation",
+    "Family": "Entertainment",
+    "Film": "Entertainment",
+}
+EVENT_FALLBACK_CATEGORY = "Entertainment"
+KM_PER_MILE = 1.609344
+
+# Invariant: every category we'd ever route an event to MUST be one of the
+# canonical 11. If someone adds a new mapping target without first adding the
+# category to categories.ALLOWED_CATEGORIES, the import fails loudly here
+# instead of producing silently-unselectable events at runtime.
+_ROUTE_TARGETS = set(SEGMENT_TO_CATEGORY.values()) | {EVENT_FALLBACK_CATEGORY}
+assert _ROUTE_TARGETS <= _ALLOWED_CATEGORY_SET, (
+    "Segment mapping points at categories that are not in "
+    "categories.ALLOWED_CATEGORIES: "
+    f"{_ROUTE_TARGETS - _ALLOWED_CATEGORY_SET}"
+)
+
+
+def map_segment_to_category(segment: str | None) -> str:
+    """Map a Ticketmaster segment to one of our canonical 11 categories."""
+    if not segment:
+        return EVENT_FALLBACK_CATEGORY
+    return SEGMENT_TO_CATEGORY.get(segment.strip(), EVENT_FALLBACK_CATEGORY)
 
 
 def normalize_google_price_level(price_level: str | None) -> str:
@@ -110,46 +148,101 @@ def fetch_venues_from_bigquery(
 
 
 def fetch_events_from_bigquery(
-    max_distance_miles: float,
-    genres: list[str] | None = None,
+    categories: list[str],
+    max_distance_km: float,
     *,
+    days_ahead: int = 60,
     client: bigquery.Client | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Load event rows for display / future calendar + budget scoring.
+    Load upcoming events for the /events endpoint.
 
-    Each dict includes:
-      name, category (genre preferred), price_min, price_max, distance_miles,
-      start_datetime_utc, venue_name, event_url, image_url
+    Filters past events at the SQL boundary (start_datetime_utc > NOW), so the
+    caller never sees a stale row. The events table stores distance in MILES;
+    we convert to KM in the output so callers can use one unit everywhere.
 
-    Note: decision_engine.compute_score is venue-oriented (price_level string).
-    Use this data in a separate event scorer or extend the request model.
+    Args:
+        categories: user-selected canonical categories (e.g. ["Entertainment",
+            "Arts & Culture"]). Empty list returns []. We SELECT all upcoming
+            events whose Ticketmaster segment maps to one of these.
+        max_distance_km: filter on distance_miles converted to km in SQL.
+        days_ahead: only include events starting within this many days; clamps
+            absurdly far-future Ticketmaster rows out of the demo.
+
+    Returns:
+        Dicts with: name, category (canonical, mapped from segment), price_min,
+        price_max, price_currency, distance_km, start_datetime_utc, venue_name,
+        event_url, image_url, segment, genre.
     """
-    genre_filter = ""
-    params: list = [
-        bigquery.ScalarQueryParameter("max_distance", "FLOAT64", max_distance_miles),
-    ]
-    if genres:
-        genre_filter = "AND (genre IN UNNEST(@genres) OR segment IN UNNEST(@genres))"
-        params.append(bigquery.ArrayQueryParameter("genres", "STRING", genres))
+    if not categories:
+        return []
 
+    # Reverse the segment→category map so we can filter at SQL time on the
+    # (smaller) set of segments that produce the user's chosen categories.
+    wanted_segments = [seg for seg, cat in SEGMENT_TO_CATEGORY.items() if cat in set(categories)]
+    # If "Entertainment" is selected, also include the fallback bucket
+    # (Undefined / Miscellaneous / null segment) so those rows aren't lost.
+    include_fallback = EVENT_FALLBACK_CATEGORY in set(categories)
+
+    # Build the segment filter dynamically so callers don't need to know about
+    # the fallback bucket. Either the segment is in our wanted list, OR it's a
+    # null / unknown segment when the fallback category is selected.
+    segment_clauses = []
+    params: list = [
+        bigquery.ScalarQueryParameter(
+            "max_distance_miles", "FLOAT64", max_distance_km / KM_PER_MILE
+        ),
+        bigquery.ScalarQueryParameter("days_ahead", "INT64", days_ahead),
+    ]
+    if wanted_segments:
+        segment_clauses.append("segment IN UNNEST(@segments)")
+        params.append(bigquery.ArrayQueryParameter("segments", "STRING", wanted_segments))
+    if include_fallback:
+        segment_clauses.append(
+            "(segment IS NULL OR TRIM(segment) IN ('', 'Undefined', 'Miscellaneous'))"
+        )
+    if not segment_clauses:
+        return []
+
+    segment_filter = " OR ".join(segment_clauses)
+
+    # The events table is append-only: every cron run inserts a fresh row per
+    # event_id. The insert-time dedup in events_to_bq.py only blocks SAME-DAY
+    # re-inserts, so once the 3x/week scrape kicks in, an upcoming Symphony
+    # show will pile up across days. Dedup at query time by event_id, keeping
+    # the most recently fetched row via QUALIFY ROW_NUMBER().
     query = f"""
         SELECT
             name,
-            COALESCE(NULLIF(TRIM(genre), ''), NULLIF(TRIM(segment), ''), 'Other') AS category,
+            segment,
+            genre,
             price_min,
             price_max,
+            price_currency,
             distance_miles,
+            distance_miles * {KM_PER_MILE} AS distance_km,
             start_datetime_utc,
             venue_name,
             event_url,
             image_url
         FROM {_events_fqn()}
         WHERE distance_miles IS NOT NULL
-          AND distance_miles <= @max_distance
-        {genre_filter}
+          AND distance_miles <= @max_distance_miles
+          AND start_datetime_utc IS NOT NULL
+          AND start_datetime_utc > CURRENT_TIMESTAMP()
+          AND start_datetime_utc < TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL @days_ahead DAY)
+          AND ({segment_filter})
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY event_id ORDER BY fetched_at DESC) = 1
+        ORDER BY start_datetime_utc ASC
+        LIMIT 100
     """
     job_config = bigquery.QueryJobConfig(query_parameters=params)
     bq = client or _bq_client()
     rows = bq.query(query, job_config=job_config).result()
-    return [dict(row.items()) for row in rows]
+
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        d = dict(row.items())
+        d["category"] = map_segment_to_category(d.get("segment"))
+        out.append(d)
+    return out

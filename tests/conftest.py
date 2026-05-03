@@ -9,6 +9,23 @@ from unittest.mock import MagicMock
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _disable_trained_ranker(monkeypatch):
+    """
+    Disable the trained ranker for every test by default. Existing tests assert
+    v0-score-based candidate ordering, which is only true when no ML model is
+    loaded. Tests that exercise the ranker explicitly set their own model via
+    `monkeypatch.setattr("decision_engine.RANKER_MODEL", stub_model)`.
+    """
+    try:
+        import decision_engine
+
+        monkeypatch.setattr(decision_engine, "RANKER_MODEL", None, raising=False)
+        monkeypatch.setattr(decision_engine, "RANKER_MODEL_VERSION", None, raising=False)
+    except ImportError:
+        pass  # tests that don't import decision_engine still run
+
+
 @pytest.fixture
 def make_fake_openai_client():
     """

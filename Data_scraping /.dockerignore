@@ -1,0 +1,14 @@
+# Never bake secrets / dev clutter into the image — Cloud Run jobs receive
+# env vars at runtime, not from a baked-in .env.
+.env
+.env.*
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.git/
+.gitignore
+README.md
+sample_*.py
+*.json

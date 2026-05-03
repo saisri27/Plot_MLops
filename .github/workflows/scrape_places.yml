@@ -1,0 +1,46 @@
+name: Scrape Google Places (manual fallback)
+
+# Production schedule lives on Cloud Run jobs + Cloud Scheduler in GCP, not
+# here — see scripts/setup_cloud_run_jobs.sh. This workflow stays as a manual
+# emergency fallback. Each manual run still costs ~$13 in Places API calls,
+# so only trigger when GCP scheduling is broken.
+on:
+  workflow_dispatch:
+
+jobs:
+  scrape-places:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install scraper deps
+        working-directory: "Data_scraping "
+        run: pip install -r requirements.txt
+
+      # Auths against GCP using the same service-account JSON as scrape_events.yml.
+      # Required GitHub Secrets (Settings → Secrets and variables → Actions):
+      #   GCP_SA_KEY:             contents of a service-account JSON with
+      #                           roles/bigquery.dataEditor + roles/bigquery.jobUser
+      #                           on mlops-project-491402
+      #   GOOGLE_PLACES_API_KEY:  Places API (New) key
+      #   GCP_PROJECT:            mlops-project-491402
+      - name: Auth to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Run scraper
+        working-directory: "Data_scraping "
+        env:
+          GOOGLE_PLACES_API_KEY: ${{ secrets.GOOGLE_PLACES_API_KEY }}
+          GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
+          BQ_DATASET: places_raw
+          BQ_TABLE: venues
+        run: python places_to_bq.py

@@ -92,11 +92,44 @@
     background: var(--sage); border-color: #7cae89; color: #1d3a26; font-weight: 600;
   }
 
-  /* Per-card vibe accents */
-  #users .card:nth-child(1)::before { background: radial-gradient(circle at 30% 30%, var(--accent-2), transparent 70%); }
-  #users .card:nth-child(2)::before { background: radial-gradient(circle at 30% 30%, var(--lilac), transparent 70%); }
-  #users .card:nth-child(3)::before { background: radial-gradient(circle at 30% 30%, var(--sage), transparent 70%); }
-  #users .card:nth-child(4)::before { background: radial-gradient(circle at 30% 30%, var(--coral), transparent 70%); }
+  /* Per-card vibe accents — cycle through 4 colors so any group size looks good */
+  #users .card:nth-child(4n+1)::before { background: radial-gradient(circle at 30% 30%, var(--accent-2), transparent 70%); }
+  #users .card:nth-child(4n+2)::before { background: radial-gradient(circle at 30% 30%, var(--lilac), transparent 70%); }
+  #users .card:nth-child(4n+3)::before { background: radial-gradient(circle at 30% 30%, var(--sage), transparent 70%); }
+  #users .card:nth-child(4n+4)::before { background: radial-gradient(circle at 30% 30%, var(--coral), transparent 70%); }
+
+  /* Card name + remove button row */
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; position: relative; z-index: 1; }
+  .name-input {
+    flex: 1; min-width: 0;
+    border: 0; background: transparent; color: var(--ink);
+    font-size: 1.05rem; font-weight: 700; padding: 4px 6px;
+    border-radius: 8px;
+  }
+  .name-input:focus { outline: 2px solid rgba(217,107,60,0.25); background: #fff; }
+  .name-input::placeholder { color: var(--muted); font-weight: 500; }
+  .user-id-tag { color: var(--muted); font-size: .75rem; font-weight: 500; }
+  .remove-btn {
+    background: transparent; border: 1px solid var(--line); color: var(--muted);
+    width: 26px; height: 26px; border-radius: 50%; padding: 0;
+    cursor: pointer; line-height: 1; font-size: 1rem;
+    box-shadow: none; transition: background .15s ease, color .15s ease;
+  }
+  .remove-btn:hover:not(:disabled) { background: #ffe7e0; color: #a64d22; border-color: #f4b8a8; }
+  .remove-btn:disabled { opacity: .35; cursor: not-allowed; }
+
+  /* Add-friend card */
+  .add-card {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 220px; cursor: pointer;
+    background: transparent;
+    border: 2px dashed #d8c8b3;
+    border-radius: 18px; color: var(--muted);
+    font-weight: 600; font-size: .95rem;
+    transition: background .15s ease, border-color .15s ease, color .15s ease;
+  }
+  .add-card:hover { background: #fff7ee; border-color: var(--accent); color: var(--accent); }
+  .add-card span { font-size: 1.4rem; margin-right: 6px; line-height: 1; }
 
   /* Button */
   button {
@@ -131,6 +164,20 @@
   a { color: var(--accent); text-decoration: none; font-weight: 600; }
   a:hover { text-decoration: underline; }
   .error { color: #8a2b1d; background: #ffe7e0; padding: 10px 12px; border-radius: 12px; margin-top: 12px; border: 1px solid #f7c2b3; }
+
+  /* Feedback buttons (Yay / Nahh) */
+  .feedback { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+  .fb-btn {
+    padding: 6px 14px; border-radius: 999px; border: 1px solid var(--line);
+    background: #fff; color: var(--ink); font-weight: 600; font-size: .82rem;
+    cursor: pointer; transition: transform .08s ease, background .15s ease;
+  }
+  .fb-btn:hover { transform: translateY(-1px); }
+  .fb-btn.yay  { background: #eaf4ec; border-color: #b8d6bf; color: #2f6b3c; }
+  .fb-btn.nahh { background: #ffe7e0; border-color: #f4b8a8; color: #a64d22; }
+  .fb-btn.sent { opacity: .55; cursor: default; transform: none; }
+  .fb-status { font-size: .75rem; color: var(--muted); margin-left: 4px; }
+  .rec-id { font-size: .72rem; color: var(--muted); margin-top: 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
   /* Ranking-mode banner shown above results: which engine ranked them */
   .rank-mode {
@@ -181,7 +228,8 @@
 const CATEGORIES = [
   "Food & Drink","Outdoors","Entertainment","Arts & Culture",
   "Nightlife","Sports & Recreation","Wellness & Beauty",
-  "Shopping","Classes & Workshops","Pets & Animals","Religious Places"
+  "Shopping","Classes & Workshops","Pets & Animals",
+  "Music & Live Shows"
 ];
 const USERS = [
   { id: "user_1", name: "Sai",    budget: "medium", distance: 5, cats: new Set(["Food & Drink"]) },
@@ -190,14 +238,38 @@ const USERS = [
   { id: "user_4", name: "Josh",   budget: "medium", distance: 6, cats: new Set(["Arts & Culture"]) },
 ];
 
+let NEXT_USER_NUM = USERS.length + 1;
+const SUGGESTED_NAMES = ["Maya","Ravi","Zoe","Theo","Liam","Priya","Noah","Iris","Owen","Nia"];
+
+function makeNewUser() {
+  const idx = NEXT_USER_NUM++;
+  const name = SUGGESTED_NAMES[(idx - 1) % SUGGESTED_NAMES.length];
+  return { id: `user_${idx}`, name, budget: "medium", distance: 5, cats: new Set(["Food & Drink"]) };
+}
+
 function renderUsers() {
   const root = document.getElementById("users");
   root.innerHTML = "";
+  const onlyOne = USERS.length <= 1;
+
   USERS.forEach((u, i) => {
     const card = document.createElement("div");
     card.className = "card";
     card.innerHTML = `
-      <h3>${u.name} <small>(${u.id})</small></h3>
+      <div class="card-head">
+        <input class="name-input" type="text" value="${u.name}" placeholder="Friend's name"
+               data-idx="${i}" data-field="name" maxlength="24" />
+        <span class="user-id-tag">${u.id}</span>
+        <button class="remove-btn" title="Remove this friend"
+                data-idx="${i}" ${onlyOne ? "disabled" : ""}>×</button>
+      </div>
+      <label>Describe the vibe (optional, LLM fills in below)</label>
+      <div style="display:flex; gap:6px; margin-bottom:6px;">
+        <input class="vibe-input" type="text" placeholder="e.g. chill cocktail night, no clubs"
+               data-idx="${i}" style="flex:1;" />
+        <button class="vibe-btn" data-idx="${i}" type="button">Parse</button>
+      </div>
+      <div class="vibe-status meta" id="vibe-status-${i}"></div>
       <label>Budget</label>
       <select data-idx="${i}" data-field="budget">
         <option value="low" ${u.budget==='low'?'selected':''}>low</option>
@@ -214,6 +286,37 @@ function renderUsers() {
     root.appendChild(card);
   });
 
+  // "+ Add friend" card always appears at the end (cap at 10 to keep UI sane)
+  if (USERS.length < 10) {
+    const addCard = document.createElement("div");
+    addCard.className = "add-card";
+    addCard.id = "add-friend";
+    addCard.innerHTML = `<span>+</span> Add friend`;
+    root.appendChild(addCard);
+  }
+
+  // Wire up the add-friend card
+  const addCard = document.getElementById("add-friend");
+  if (addCard) {
+    addCard.addEventListener("click", () => {
+      USERS.push(makeNewUser());
+      renderUsers();
+    });
+  }
+
+  // Wire up per-card events
+  root.querySelectorAll(".name-input").forEach(el => {
+    el.addEventListener("input", e => {
+      USERS[+e.target.dataset.idx].name = e.target.value.trim() || "Friend";
+    });
+  });
+  root.querySelectorAll(".remove-btn").forEach(el => {
+    el.addEventListener("click", e => {
+      const idx = +e.currentTarget.dataset.idx;
+      USERS.splice(idx, 1);
+      renderUsers();
+    });
+  });
   root.querySelectorAll("select[data-field=budget]").forEach(el => {
     el.addEventListener("change", e => {
       USERS[+e.target.dataset.idx].budget = e.target.value;
@@ -240,7 +343,55 @@ function renderUsers() {
       }
     });
   });
+  root.querySelectorAll(".vibe-btn").forEach(btn => {
+    btn.addEventListener("click", e => parseVibe(+e.currentTarget.dataset.idx));
+  });
 }
+
+// Derive /parse URL from the /recommend URL the user entered.
+function parseUrlFromApi() {
+  const apiUrl = document.getElementById("apiUrl").value.trim();
+  return apiUrl.replace(/\/recommend\/?$/, "/parse");
+}
+
+async function parseVibe(idx) {
+  const input = document.querySelector(`.vibe-input[data-idx="${idx}"]`);
+  const statusEl = document.getElementById(`vibe-status-${idx}`);
+  const text = (input?.value || "").trim();
+  if (!text) {
+    statusEl.textContent = "Type a vibe first.";
+    return;
+  }
+  statusEl.textContent = "Parsing...";
+  try {
+    const resp = await fetch(parseUrlFromApi(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ free_text: text }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || resp.statusText);
+
+    USERS[idx].budget   = data.budget;
+    USERS[idx].distance = Math.round(data.max_distance_km);
+    USERS[idx].cats     = new Set(data.categories || []);
+    renderUsers();
+    // Restore the typed text so the user can iterate.
+    const restored = document.querySelector(`.vibe-input[data-idx="${idx}"]`);
+    if (restored) restored.value = text;
+    const restoredStatus = document.getElementById(`vibe-status-${idx}`);
+    if (restoredStatus) {
+      restoredStatus.textContent = data.used_llm
+        ? `Parsed by ${data.llm_model} (${data.llm_latency_ms}ms)`
+        : "Used defaults (no OPENAI_API_KEY).";
+    }
+  } catch (err) {
+    statusEl.textContent = `Parse failed: ${err.message}`;
+  }
+}
+
+// Holds the latest recommendation context so feedback POSTs can include rec_id
+let LAST_REC = { rec_id: null, apiUrl: null };
 
 async function recommend() {
   const apiUrl = document.getElementById("apiUrl").value.trim();
@@ -272,8 +423,10 @@ async function recommend() {
       return;
     }
     const data = JSON.parse(text);
+    LAST_REC = { rec_id: data.rec_id, apiUrl };
     renderResult(data);
-    status.textContent = `Scored ${data.venues_scored} venues. Showing top ${data.recommendations.length}.`;
+    const recPart = data.rec_id != null ? ` (rec #${data.rec_id})` : "";
+    status.textContent = `Scored ${data.venues_scored} venues. Showing top ${data.recommendations.length}${recPart}.`;
   } catch (err) {
     status.innerHTML = `<div class="error">Network error: ${err.message}. Is FastAPI running on ${apiUrl}?</div>`;
   }
@@ -281,6 +434,7 @@ async function recommend() {
 
 function renderResult(data) {
   const output = document.getElementById("output");
+  const recId = data.rec_id;
   const merged = `
     <div class="card" style="margin-top:16px">
       <h3>Group agreement</h3>
@@ -288,6 +442,7 @@ function renderResult(data) {
            <span class="pill" style="margin-left:12px">max distance</span>${data.merged_max_distance_km} km
            <span class="pill" style="margin-left:12px">size</span>${data.group_size}</div>
       <div class="meta">categories: ${data.merged_categories.map(c=>`<span class="pill">${c}</span>`).join(" ")}</div>
+      ${recId != null ? `<div class="rec-id">rec_id: ${recId} · model: ${data.model_version || 'rules_v1'}</div>` : ""}
     </div>
   `;
   const banner = data.used_llm
@@ -308,6 +463,11 @@ function renderResult(data) {
           </div>
           <div class="reason">${v.reason}</div>
           ${v.google_maps_uri ? `<div class="meta"><a href="${v.google_maps_uri}" target="_blank">Open in Google Maps</a></div>` : ""}
+          <div class="feedback" data-venue="${encodeURIComponent(v.name)}" data-score="${v.score}">
+            <button class="fb-btn yay"  data-signal="yay">Yay 🎉</button>
+            <button class="fb-btn nahh" data-signal="nahh">Nahh 👎</button>
+            <span class="fb-status"></span>
+          </div>
         </div>
       `).join("")}
     </div>
@@ -315,7 +475,64 @@ function renderResult(data) {
   output.innerHTML = merged + venues;
 }
 
+async function sendFeedback(btn) {
+  const wrap   = btn.closest(".feedback");
+  const venue  = decodeURIComponent(wrap.dataset.venue);
+  const score  = parseFloat(wrap.dataset.score);
+  const signal = btn.dataset.signal;          // 'yay' or 'nahh'
+  const status = wrap.querySelector(".fb-status");
+  const apiUrl = (LAST_REC.apiUrl || document.getElementById("apiUrl").value.trim())
+                   .replace(/\/recommend$/, "/feedback");
+
+  // Disable both buttons so we don't double-send
+  wrap.querySelectorAll(".fb-btn").forEach(b => {
+    b.disabled = true;
+    b.classList.add("sent");
+  });
+  status.textContent = "saving...";
+
+  // For the demo, attribute group feedback to the first user (Sai) and keep the
+  // full group + score snapshot in context for the training pipeline.
+  const body = {
+    user_id:    USERS[0].id,
+    rec_id:     LAST_REC.rec_id,
+    venue_name: venue,
+    signal:     signal,
+    request_context: {
+      score_at_recommendation: score,
+      group_user_ids: USERS.map(u => u.id),
+      source: "demo.html",
+    },
+  };
+
+  try {
+    const resp = await fetch(apiUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      status.textContent = `error: ${data.detail || resp.status}`;
+      return;
+    }
+    status.textContent = data.stored
+      ? `saved · feedback #${data.feedback_id}`
+      : "logged (DB not configured)";
+  } catch (err) {
+    status.textContent = `network error: ${err.message}`;
+  }
+}
+
 document.getElementById("go").addEventListener("click", recommend);
+
+// Event delegation for Yay/Nahh buttons (cards are re-rendered each request)
+document.getElementById("output").addEventListener("click", (e) => {
+  if (e.target.classList.contains("fb-btn") && !e.target.disabled) {
+    sendFeedback(e.target);
+  }
+});
+
 renderUsers();
 </script>
 </body>

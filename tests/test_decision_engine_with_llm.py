@@ -229,7 +229,7 @@ def test_recommend_response_includes_llm_fields(offline_client, monkeypatch):
         "llm_model",
         "prompt_version",
         "llm_latency_ms",
-        "recommendation_log_id",
+        "rec_id",
     ):
         assert field in body, f"missing field: {field}"
     assert isinstance(body["used_llm"], bool)
@@ -290,3 +290,80 @@ def test_recommend_skips_llm_when_openai_unavailable(offline_client, monkeypatch
     assert called["n"] == 0
     body = resp.json()
     assert body["used_llm"] is False
+
+
+# ---------------------------------------------------------------------------
+# DB log path captures candidate_set + llm_picks + LLM cost (ranker training inputs)
+# ---------------------------------------------------------------------------
+
+
+def test_recommend_logs_candidate_set_and_llm_picks(offline_client, monkeypatch):
+    """
+    The ranker training pipeline depends on these fields being passed to
+    log_recommendation_request — guard against future regressions where
+    someone drops them from the call site.
+    """
+    monkeypatch.setattr(llm_rerank, "OPENAI_AVAILABLE", True)
+
+    def fake_rerank(candidates, merged, group_size, top_k, **kw):
+        picks = [
+            llm_rerank.LLMRerankResult(name=candidates[0]["name"], reason="best fit", llm_rank=1)
+        ]
+        return picks, _fake_meta()
+
+    monkeypatch.setattr(llm_rerank, "rerank_venues", fake_rerank)
+
+    captured: dict = {}
+
+    def fake_log(**kwargs):
+        captured.update(kwargs)
+        return 9999  # rec_id
+
+    monkeypatch.setattr(decision_engine, "DB_AVAILABLE", True)
+    monkeypatch.setattr(decision_engine, "log_recommendation_request", fake_log)
+    monkeypatch.setattr(decision_engine, "upsert_user", lambda **kw: None)
+
+    resp = offline_client.post("/recommend", json=_request_body(top_k=3))
+    assert resp.status_code == 200
+    assert resp.json()["rec_id"] == 9999
+
+    # candidate_set must be the full v0 candidate list (not just the top-K final)
+    assert "candidate_set" in captured
+    assert len(captured["candidate_set"]) == len(FAKE_VENUES)
+    # llm_picks must have name + reason + llm_rank from the LLM. The fake
+    # rerank picks candidates[0], which is the v0 top — so it's whatever name
+    # appears at index 0 of the captured candidate_set, not FAKE_VENUES[0].
+    assert "llm_picks" in captured
+    assert captured["llm_picks"][0]["name"] == captured["candidate_set"][0]["name"]
+    assert captured["llm_picks"][0]["reason"] == "best fit"
+    # LLM metadata must round-trip into the log row
+    assert captured["llm_latency_ms"] == 250
+    assert captured["llm_cost_usd"] == 0.000085
+    # model_version must reflect the LLM, not the v0 fallback
+    assert "gpt-4o-mini" in captured["model_version"]
+    assert "rerank_v1" in captured["model_version"]
+
+
+def test_recommend_logs_empty_llm_picks_on_v0_fallback(offline_client, monkeypatch):
+    monkeypatch.setattr(llm_rerank, "OPENAI_AVAILABLE", False)
+
+    captured: dict = {}
+
+    def fake_log(**kwargs):
+        captured.update(kwargs)
+        return 1
+
+    monkeypatch.setattr(decision_engine, "DB_AVAILABLE", True)
+    monkeypatch.setattr(decision_engine, "log_recommendation_request", fake_log)
+    monkeypatch.setattr(decision_engine, "upsert_user", lambda **kw: None)
+
+    resp = offline_client.post("/recommend", json=_request_body(top_k=3))
+    assert resp.status_code == 200
+
+    assert captured["llm_picks"] == []
+    assert captured["llm_latency_ms"] is None
+    assert captured["llm_cost_usd"] is None
+    assert captured["model_version"] == "rules_v1"
+    # candidate_set still populated even on v0 fallback so future-LLM rows are
+    # comparable to today's pure-v0 rows during eval.
+    assert len(captured["candidate_set"]) == len(FAKE_VENUES)

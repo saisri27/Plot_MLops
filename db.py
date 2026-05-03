@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import secrets
 from typing import Any
 
 import psycopg2
@@ -70,33 +71,125 @@ CREATE TABLE IF NOT EXISTS users (
     default_budget  TEXT DEFAULT 'medium',        -- low / medium / high
     default_categories TEXT[] DEFAULT '{}',       -- e.g. {Food & Drink, Outdoors}
     default_max_distance_km FLOAT DEFAULT 5.0,
+    date_of_birth   DATE,
+    pronouns        TEXT,                         -- 'she/her', 'he/him', 'they/them', or custom
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Migrations for users table when columns were added later (idempotent).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS date_of_birth DATE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS pronouns TEXT;
+
 -- Log every /recommend call (for analytics and retraining feature engineering)
 CREATE TABLE IF NOT EXISTS recommendation_log (
-    id              SERIAL PRIMARY KEY,
+    id              SERIAL PRIMARY KEY,            -- this is the rec_id used in feedback
     user_ids        TEXT[],                        -- all users in the group
     merged_budget   TEXT,
+    merged_max_distance_km FLOAT,
+    group_size      INTEGER,
     categories      TEXT[],
     top_venues      TEXT[],                        -- names of venues returned
+    top_venues_payload JSONB DEFAULT '[]',         -- full venue objects with score/features at time of rec
+    request_context JSONB DEFAULT '{}',            -- raw request payload (per-user prefs)
+    model_version   TEXT DEFAULT 'rules_v1',       -- which scorer produced this
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Migrations for recommendation_log when columns were added later (idempotent)
+ALTER TABLE recommendation_log ADD COLUMN IF NOT EXISTS merged_max_distance_km FLOAT;
+ALTER TABLE recommendation_log ADD COLUMN IF NOT EXISTS group_size INTEGER;
+ALTER TABLE recommendation_log ADD COLUMN IF NOT EXISTS top_venues_payload JSONB DEFAULT '[]';
+ALTER TABLE recommendation_log ADD COLUMN IF NOT EXISTS request_context JSONB DEFAULT '{}';
+ALTER TABLE recommendation_log ADD COLUMN IF NOT EXISTS model_version TEXT DEFAULT 'rules_v1';
+-- The full v0-scored candidate set sent to the LLM (~20 venues). Lets the
+-- ranker train on shown-but-not-picked negatives instead of just the one
+-- venue that got Yay/Nahh. Also lets eval pipelines replay prompts later.
+ALTER TABLE recommendation_log ADD COLUMN IF NOT EXISTS candidate_set JSONB DEFAULT '[]';
+-- The LLM's picks with reasons, separate from top_venues_payload so we can
+-- compare LLM ordering against feedback even if model_version doesn't say "llm".
+ALTER TABLE recommendation_log ADD COLUMN IF NOT EXISTS llm_picks JSONB DEFAULT '[]';
+ALTER TABLE recommendation_log ADD COLUMN IF NOT EXISTS llm_latency_ms INTEGER;
+ALTER TABLE recommendation_log ADD COLUMN IF NOT EXISTS llm_cost_usd FLOAT;
 
 -- Log user feedback on individual venues (the ML training signal)
 CREATE TABLE IF NOT EXISTS feedback (
     id              SERIAL PRIMARY KEY,
-    user_id         TEXT REFERENCES users(user_id) ON DELETE SET NULL,
+    rec_id          INTEGER,                       -- FK → recommendation_log.id (the request that surfaced this venue)
+    user_id         TEXT,
     venue_name      TEXT NOT NULL,
-    accepted        BOOLEAN NOT NULL,             -- True = liked, False = rejected
-    context         JSONB DEFAULT '{}',           -- optional: budget/category context
+    signal          TEXT NOT NULL DEFAULT 'yay',   -- 'yay' | 'nahh' | 'visited'
+    accepted        BOOLEAN NOT NULL,              -- yay/visited = true, nahh = false
+    context         JSONB DEFAULT '{}',
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Index for fast feedback lookups by user
+-- Migrations for feedback when columns were added later (idempotent)
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS rec_id INTEGER;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS signal TEXT DEFAULT 'yay';
+
+-- Drop the old FK on feedback.user_id so we can log feedback for demo / mock /
+-- group-pseudo user_ids that don't exist in `users`. We can re-add a soft FK
+-- later once we have a real auth flow.
+ALTER TABLE feedback DROP CONSTRAINT IF EXISTS feedback_user_id_fkey;
+
+-- Indexes
 CREATE INDEX IF NOT EXISTS idx_feedback_user_id ON feedback(user_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_venue   ON feedback(venue_name);
+CREATE INDEX IF NOT EXISTS idx_feedback_rec_id  ON feedback(rec_id);
+
+-- ============================================================
+-- Groups: shareable-link multi-user planning sessions.
+-- A creator mints a group + invite_token, sends the URL to friends.
+-- Friends open the URL, type a display name, and join. Identity is
+-- per-device (random user_id from localStorage) until real Supabase
+-- Auth lands; the schema doesn't care which kind of user_id it is.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS groups (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name            TEXT NOT NULL,
+    invite_token    TEXT UNIQUE NOT NULL,        -- short URL-safe token
+    created_by      TEXT NOT NULL,               -- creator's user_id
+    last_rec_id     INTEGER,                     -- the rec_id everyone is voting on
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_groups_invite_token ON groups(invite_token);
+CREATE INDEX IF NOT EXISTS idx_groups_created_by   ON groups(created_by);
+
+-- One row per (group, member). Composite primary key prevents the same
+-- person joining twice. `prefs` stores the member's per-group prefs as
+-- JSON (budget, categories, max_distance_km) so we can merge across
+-- members at recommend time.
+CREATE TABLE IF NOT EXISTS group_members (
+    group_id        UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    user_id         TEXT NOT NULL,
+    display_name    TEXT NOT NULL,
+    prefs           JSONB DEFAULT NULL,          -- {budget, categories, max_distance_km}
+    joined_at       TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (group_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id);
+
+-- One row per (group, rec_id, member, venue) yay/nahh. Lets every member's
+-- phone show the live tally as votes come in (frontend polls /groups/{id}).
+-- We don't dedupe in-place — the latest vote wins via inserted_at.
+CREATE TABLE IF NOT EXISTS group_votes (
+    id              SERIAL PRIMARY KEY,
+    group_id        UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    rec_id          INTEGER NOT NULL,
+    user_id         TEXT NOT NULL,
+    venue_name      TEXT NOT NULL,
+    signal          TEXT NOT NULL,               -- 'yay' | 'nahh'
+    inserted_at     TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_group_votes_group_rec ON group_votes(group_id, rec_id);
+CREATE INDEX IF NOT EXISTS idx_group_votes_member    ON group_votes(group_id, user_id);
+
+-- pgcrypto enables gen_random_uuid() above. Idempotent — no-op if already enabled.
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 """
 
 
@@ -150,6 +243,36 @@ def upsert_user(
         conn.commit()
 
 
+def save_user_profile(
+    user_id: str,
+    name: str | None = None,
+    pronouns: str | None = None,
+    date_of_birth: str | None = None,
+) -> dict[str, Any]:
+    """
+    Insert or update the profile fields the onboarding screen collects.
+    Keeps existing default_* prefs untouched (they're only set later by
+    /recommend's upsert_user call). Returns the resulting row.
+    """
+    sql = """
+        INSERT INTO users (user_id, name, pronouns, date_of_birth, updated_at)
+        VALUES (%s, %s, %s, %s, NOW())
+        ON CONFLICT (user_id) DO UPDATE SET
+            name           = COALESCE(EXCLUDED.name, users.name),
+            pronouns       = COALESCE(EXCLUDED.pronouns, users.pronouns),
+            date_of_birth  = COALESCE(EXCLUDED.date_of_birth, users.date_of_birth),
+            updated_at     = NOW()
+        RETURNING user_id, name, email, pronouns, date_of_birth,
+                  default_budget, default_categories, default_max_distance_km,
+                  created_at, updated_at;
+    """
+    with _get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(sql, (user_id, name, pronouns, date_of_birth))
+        row = cur.fetchone()
+        conn.commit()
+    return dict(row) if row else {}
+
+
 def get_user(user_id: str) -> dict[str, Any] | None:
     """Fetch a user's preferences by user_id. Returns None if not found."""
     sql = "SELECT * FROM users WHERE user_id = %s LIMIT 1;"
@@ -169,27 +292,58 @@ def log_recommendation_request(
     merged_budget: str,
     categories: list[str],
     top_venue_names: list[str],
-) -> int | None:
+    merged_max_distance_km: float | None = None,
+    group_size: int | None = None,
+    top_venues_payload: list[dict[str, Any]] | None = None,
+    request_context: dict[str, Any] | None = None,
+    model_version: str = "rules_v1",
+    candidate_set: list[dict[str, Any]] | None = None,
+    llm_picks: list[dict[str, Any]] | None = None,
+    llm_latency_ms: int | None = None,
+    llm_cost_usd: float | None = None,
+) -> int:
     """
     Log every /recommend call. Used for analytics and future feature engineering.
+    Returns the new rec_id (recommendation_log.id) so the caller can echo it back
+    to the client and link feedback rows to this exact recommendation.
 
-    Returns the SERIAL id of the inserted row so /recommend can echo it back to
-    the client. PR 3's /feedback uses this id as a join key to reconstruct the
-    candidate set that produced an accepted/rejected pick.
-    Returns None if the INSERT did not produce an id (defensive — shouldn't
-    happen with a SERIAL PRIMARY KEY, but guards against driver edge cases).
+    candidate_set:  the full v0-scored candidates fed to the LLM (~20 venues).
+                    The ranker trains on these so it sees shown-but-not-picked
+                    negatives, not just the one venue that got Yay/Nahh.
+    llm_picks:      the LLM's picks with reasons. Lets eval pipelines compare
+                    LLM order to feedback even when fallback to v0 happens.
     """
     sql = """
-        INSERT INTO recommendation_log (user_ids, merged_budget, categories, top_venues)
-        VALUES (%s, %s, %s, %s)
+        INSERT INTO recommendation_log
+            (user_ids, merged_budget, merged_max_distance_km, group_size,
+             categories, top_venues, top_venues_payload, request_context,
+             model_version, candidate_set, llm_picks, llm_latency_ms, llm_cost_usd)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id;
     """
     with _get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, (user_ids, merged_budget, categories, top_venue_names))
-            row = cur.fetchone()
+            cur.execute(
+                sql,
+                (
+                    user_ids,
+                    merged_budget,
+                    merged_max_distance_km,
+                    group_size,
+                    categories,
+                    top_venue_names,
+                    json.dumps(top_venues_payload or []),
+                    json.dumps(request_context or {}),
+                    model_version,
+                    json.dumps(candidate_set or []),
+                    json.dumps(llm_picks or []),
+                    llm_latency_ms,
+                    llm_cost_usd,
+                ),
+            )
+            rec_id = cur.fetchone()[0]
         conn.commit()
-    return row[0] if row else None
+    return int(rec_id)
 
 
 # ---------------------------------------------------------------------------
@@ -200,44 +354,357 @@ def log_recommendation_request(
 def log_feedback(
     user_id: str,
     venue_name: str,
-    accepted: bool,
+    signal: str = "yay",
+    rec_id: int | None = None,
     context: dict[str, Any] | None = None,
-) -> None:
+) -> int:
     """
-    Record whether a user accepted or rejected a recommended venue.
-    This is the core training signal for improving the ranker over time.
+    Record whether a user said yay/nahh/visited on a recommended venue.
+
+    Args:
+        user_id    : id of the user (or "group:..." for group-level feedback)
+        venue_name : the venue the feedback is about
+        signal     : 'yay' (liked), 'nahh' (rejected), or 'visited' (actually went)
+        rec_id     : id of the recommendation_log row this feedback links to
+        context    : optional extra info (e.g. {"score_at_rec": 0.83})
+
+    Returns the new feedback row id.
     """
+    signal = (signal or "yay").lower()
+    if signal not in {"yay", "nahh", "visited"}:
+        raise ValueError(f"Invalid signal '{signal}'. Use yay / nahh / visited.")
+    accepted = signal in {"yay", "visited"}
+
     sql = """
-        INSERT INTO feedback (user_id, venue_name, accepted, context)
-        VALUES (%s, %s, %s, %s);
+        INSERT INTO feedback (rec_id, user_id, venue_name, signal, accepted, context)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        RETURNING id;
     """
     with _get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 sql,
                 (
+                    rec_id,
                     user_id,
                     venue_name,
+                    signal,
                     accepted,
                     json.dumps(context or {}),
                 ),
             )
+            fid = cur.fetchone()[0]
         conn.commit()
+    return int(fid)
 
 
 def get_feedback_for_training() -> list[dict[str, Any]]:
     """
     Fetch all feedback rows for use in ML training.
-    Returns list of dicts: {user_id, venue_name, accepted, context, created_at}
-    Use this in your training pipeline to build the (venue, user_prefs) → accepted label.
+    Returns list of dicts: {rec_id, user_id, venue_name, signal, accepted, context, created_at}
     """
     sql = """
-        SELECT user_id, venue_name, accepted, context, created_at
+        SELECT rec_id, user_id, venue_name, signal, accepted, context, created_at
         FROM feedback
         ORDER BY created_at DESC;
     """
     with _get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(sql)
+        rows = cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_training_join() -> list[dict[str, Any]]:
+    """
+    Build the canonical (request_features, venue_features) -> label training rows
+    by joining recommendation_log with feedback on rec_id.
+
+    Each returned row is one (rec_id, venue_name, signal) sample with everything
+    the model needs about the request that produced it. The training script
+    (build_training_data.py) explodes top_venues_payload into per-venue features.
+    """
+    sql = """
+        SELECT
+            r.id                AS rec_id,
+            r.created_at        AS rec_created_at,
+            r.user_ids,
+            r.group_size,
+            r.merged_budget,
+            r.merged_max_distance_km,
+            r.categories        AS merged_categories,
+            r.top_venues_payload,
+            r.candidate_set,
+            r.llm_picks,
+            r.llm_latency_ms,
+            r.llm_cost_usd,
+            r.request_context,
+            r.model_version,
+            f.id                AS feedback_id,
+            f.user_id           AS feedback_user_id,
+            f.venue_name        AS feedback_venue_name,
+            f.signal            AS feedback_signal,
+            f.accepted          AS feedback_accepted,
+            f.context           AS feedback_context,
+            f.created_at        AS feedback_created_at
+        FROM recommendation_log r
+        LEFT JOIN feedback f ON f.rec_id = r.id
+        ORDER BY r.created_at DESC;
+    """
+    with _get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(sql)
+        rows = cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_llm_cost_summary(days: int = 7) -> dict[str, Any]:
+    """
+    Roll up recommendation_log over the last `days` for the /admin/llm-cost
+    endpoint. Returns totals, a per-day series, and a per-model_version
+    breakdown so a human can spot cost trends and which model is driving them.
+    """
+    days = max(1, min(int(days), 365))
+
+    totals_sql = """
+        SELECT
+            COUNT(*)::int                                  AS request_count,
+            COUNT(llm_cost_usd)::int                       AS llm_request_count,
+            COALESCE(SUM(llm_cost_usd), 0)::float          AS total_cost_usd,
+            COALESCE(AVG(llm_cost_usd), 0)::float          AS avg_cost_usd,
+            COALESCE(
+                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY llm_latency_ms),
+                0
+            )::float                                       AS p50_latency_ms,
+            COALESCE(
+                PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY llm_latency_ms),
+                0
+            )::float                                       AS p95_latency_ms
+        FROM recommendation_log
+        WHERE created_at >= NOW() - (%s || ' days')::interval;
+    """
+    daily_sql = """
+        SELECT
+            DATE_TRUNC('day', created_at)::date            AS day,
+            COUNT(*)::int                                  AS request_count,
+            COALESCE(SUM(llm_cost_usd), 0)::float          AS cost_usd
+        FROM recommendation_log
+        WHERE created_at >= NOW() - (%s || ' days')::interval
+        GROUP BY 1
+        ORDER BY 1;
+    """
+    by_model_sql = """
+        SELECT
+            COALESCE(model_version, 'unknown')             AS model_version,
+            COUNT(*)::int                                  AS request_count,
+            COALESCE(SUM(llm_cost_usd), 0)::float          AS cost_usd,
+            COALESCE(AVG(llm_cost_usd), 0)::float          AS avg_cost_usd
+        FROM recommendation_log
+        WHERE created_at >= NOW() - (%s || ' days')::interval
+        GROUP BY 1
+        ORDER BY cost_usd DESC;
+    """
+
+    with _get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(totals_sql, (str(days),))
+        totals = dict(cur.fetchone() or {})
+        cur.execute(daily_sql, (str(days),))
+        daily = [dict(r) for r in cur.fetchall()]
+        cur.execute(by_model_sql, (str(days),))
+        by_model = [dict(r) for r in cur.fetchall()]
+
+    for row in daily:
+        if row.get("day") is not None:
+            row["day"] = row["day"].isoformat()
+
+    return {
+        "window_days": days,
+        "totals": totals,
+        "daily": daily,
+        "by_model_version": by_model,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Groups: shareable-link multi-user sessions
+# ---------------------------------------------------------------------------
+
+
+def _new_invite_token() -> str:
+    """Short URL-safe random string. ~6 bytes -> 8 base64url chars."""
+    return secrets.token_urlsafe(6)
+
+
+def create_group(name: str, created_by: str) -> dict[str, Any]:
+    """
+    Mint a new group + invite token. The creator is added as the first member
+    in the same transaction so they immediately show up in /groups/{id}.
+    Returns {id, name, invite_token, created_by, created_at}.
+    """
+    token = _new_invite_token()
+    sql_insert = """
+        INSERT INTO groups (name, invite_token, created_by)
+        VALUES (%s, %s, %s)
+        RETURNING id, name, invite_token, created_by, created_at;
+    """
+    sql_member = """
+        INSERT INTO group_members (group_id, user_id, display_name)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (group_id, user_id) DO NOTHING;
+    """
+    with _get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(sql_insert, (name, token, created_by))
+        row = cur.fetchone()
+        # Use the creator's user_id as their first display_name placeholder;
+        # they'll typically rename via the home/profile screen.
+        cur.execute(sql_member, (row["id"], created_by, "Host"))
+        conn.commit()
+    return dict(row)
+
+
+def get_group_by_token(token: str) -> dict[str, Any] | None:
+    """
+    Return a lightweight group preview (no member prefs) for the
+    'someone invited you' landing screen. None if the token is unknown.
+    """
+    sql = """
+        SELECT g.id, g.name, g.invite_token, g.created_by, g.created_at,
+               COUNT(gm.user_id) AS member_count
+        FROM groups g
+        LEFT JOIN group_members gm ON gm.group_id = g.id
+        WHERE g.invite_token = %s
+        GROUP BY g.id;
+    """
+    with _get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(sql, (token,))
+        row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def join_group(group_id: str, user_id: str, display_name: str) -> None:
+    """
+    Add (or refresh) a member of an existing group. ON CONFLICT updates the
+    display_name so a returning user can change how they appear without
+    creating a duplicate row.
+    """
+    sql = """
+        INSERT INTO group_members (group_id, user_id, display_name)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (group_id, user_id) DO UPDATE
+            SET display_name = EXCLUDED.display_name;
+    """
+    with _get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, (group_id, user_id, display_name))
+        conn.commit()
+
+
+def set_member_prefs(group_id: str, user_id: str, prefs: dict[str, Any]) -> None:
+    """Update a member's per-group preferences (budget, categories, distance)."""
+    sql = """
+        UPDATE group_members
+        SET prefs = %s::jsonb
+        WHERE group_id = %s AND user_id = %s;
+    """
+    with _get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, (json.dumps(prefs), group_id, user_id))
+        conn.commit()
+
+
+def get_group(group_id: str) -> dict[str, Any] | None:
+    """
+    Full group state for the live planning UI: members + each one's prefs +
+    every yay/nahh on the current rec_id + the actual rec venues if a rec
+    has been triggered. Polled every ~4 s by clients so the moment any one
+    member taps "Get our recs", every other phone hydrates from the same
+    rec without re-running the LLM.
+    """
+    sql_group = (
+        "SELECT id, name, invite_token, created_by, last_rec_id, created_at "
+        "FROM groups WHERE id = %s;"
+    )
+    sql_members = """
+        SELECT user_id, display_name, prefs, joined_at
+        FROM group_members
+        WHERE group_id = %s
+        ORDER BY joined_at ASC;
+    """
+    sql_votes = """
+        SELECT user_id, venue_name, signal, inserted_at
+        FROM group_votes
+        WHERE group_id = %s AND rec_id = %s
+        ORDER BY inserted_at DESC;
+    """
+    sql_active_rec = """
+        SELECT id, top_venues_payload, model_version, llm_latency_ms, llm_cost_usd
+        FROM recommendation_log
+        WHERE id = %s;
+    """
+    with _get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(sql_group, (group_id,))
+        group = cur.fetchone()
+        if not group:
+            return None
+        group = dict(group)
+        cur.execute(sql_members, (group_id,))
+        members = [dict(r) for r in cur.fetchall()]
+        votes = []
+        active_rec = None
+        if group["last_rec_id"] is not None:
+            cur.execute(sql_votes, (group_id, group["last_rec_id"]))
+            votes = [dict(r) for r in cur.fetchall()]
+            cur.execute(sql_active_rec, (group["last_rec_id"],))
+            row = cur.fetchone()
+            if row:
+                active_rec = dict(row)
+    group["members"] = members
+    group["votes"] = votes
+    group["active_rec"] = active_rec
+    return group
+
+
+def update_group_last_rec(group_id: str, rec_id: int) -> None:
+    """Stamp the rec_id everyone is currently voting on."""
+    sql = "UPDATE groups SET last_rec_id = %s WHERE id = %s;"
+    with _get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, (rec_id, group_id))
+        conn.commit()
+
+
+def record_group_vote(
+    group_id: str,
+    rec_id: int,
+    user_id: str,
+    venue_name: str,
+    signal: str,
+) -> int:
+    """
+    Append a vote. We don't dedupe per (member, venue) here — the latest
+    inserted_at wins on the read side. That keeps writes cheap and lets us
+    reconstruct the full voting history later if we want.
+    """
+    sql = """
+        INSERT INTO group_votes (group_id, rec_id, user_id, venue_name, signal)
+        VALUES (%s, %s, %s, %s, %s)
+        RETURNING id;
+    """
+    with _get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, (group_id, rec_id, user_id, venue_name, signal))
+        vid = cur.fetchone()[0]
+        conn.commit()
+    return int(vid)
+
+
+def list_user_groups(user_id: str) -> list[dict[str, Any]]:
+    """Groups this user belongs to, newest first. Used by HomeScreen."""
+    sql = """
+        SELECT g.id, g.name, g.invite_token, g.last_rec_id, g.created_at,
+               COUNT(gm2.user_id) AS member_count
+        FROM groups g
+        JOIN group_members gm ON gm.group_id = g.id AND gm.user_id = %s
+        LEFT JOIN group_members gm2 ON gm2.group_id = g.id
+        GROUP BY g.id
+        ORDER BY g.created_at DESC;
+    """
+    with _get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(sql, (user_id,))
         rows = cur.fetchall()
     return [dict(r) for r in rows]
 
