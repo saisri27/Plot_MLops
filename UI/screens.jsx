@@ -272,7 +272,7 @@ function JoinGroupScreen({ vibe, token, onBack, onJoined }) {
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Sai"
+              placeholder="Enter your name"
               autoFocus
               style={{
                 width: '100%',
@@ -1087,7 +1087,7 @@ function CreateGroupScreen({ vibe, onBack, onCreated }) {
             <input
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="Sai"
+              placeholder="Enter your name"
               maxLength={40}
               style={{
                 width: '100%',

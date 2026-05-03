@@ -327,6 +327,27 @@ function PlotApp() {
 
   const pal = window.PLOT_TOKENS.palette;
 
+  // Detect mobile-sized viewports. On a phone we render the app fullscreen
+  // — no fake-iPhone bezel, no side dev nav, no "prototype 375×812"
+  // backdrop label. The IOSDevice frame + side nav + tweaks panel are
+  // a desktop preview tool only; on a real phone they made the app
+  // shrink to a tiny bezel inside the user's actual screen and showed a
+  // hardcoded 9:41 status-bar time that didn't match the device clock.
+  const [isMobileViewport, setIsMobileViewport] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth < 700
+  );
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const mql = window.matchMedia('(max-width: 700px)');
+    const handler = (e) => setIsMobileViewport(e.matches);
+    if (mql.addEventListener) mql.addEventListener('change', handler);
+    else mql.addListener(handler);
+    return () => {
+      if (mql.removeEventListener) mql.removeEventListener('change', handler);
+      else mql.removeListener(handler);
+    };
+  }, []);
+
   // Map screen id → element
   const screenEl = (() => {
     const props = { vibe: tweaks.vibe, iconStyle: tweaks.iconStyle, density: tweaks.density };
@@ -345,6 +366,45 @@ function PlotApp() {
     }
   })();
 
+  // Re-usable inner content (works in both mobile-fullscreen and
+  // desktop-bezel modes).
+  const phoneInner = (
+    <div style={{ width: '100%', height: '100%', position: 'relative' }}>
+      {screenEl}
+      {/* Persistent bottom-tab nav — only on the "destination"
+          screens (Home / Memories / Profile). Hidden on transactional
+          flows where the screen-level action button owns the bottom. */}
+      {['home', 'memories', 'profile'].includes(screen) && (
+        <BottomNav
+          active={screen}
+          vibe={tweaks.vibe}
+          onChange={(tab) => {
+            if (tab === 'create') setScreen('create');
+            else setScreen(tab);
+          }}
+        />
+      )}
+    </div>
+  );
+
+  // Mobile: fullscreen render, no fake-iPhone bezel, no dev panels. The
+  // user's real device is the phone; nothing else makes sense on a small
+  // viewport.
+  if (isMobileViewport) {
+    return (
+      <div style={{
+        position: 'fixed',
+        inset: 0,
+        background: pal.cream,
+        color: pal.ink,
+        fontFamily: 'Inter, system-ui, sans-serif',
+        overflow: 'hidden',
+      }}>
+        {phoneInner}
+      </div>
+    );
+  }
+
   return (
     <div style={{
       minHeight: '100vh',
@@ -357,7 +417,7 @@ function PlotApp() {
       fontFamily: 'Inter, system-ui, sans-serif',
       position: 'relative',
     }}>
-      {/* Backdrop type label */}
+      {/* Backdrop type label — desktop preview only */}
       <div style={{
         position: 'fixed',
         top: 24, left: 28,
@@ -371,25 +431,10 @@ function PlotApp() {
       </div>
 
       <div style={{ display: 'flex', gap: 32, alignItems: 'flex-start', flexWrap: 'wrap', justifyContent: 'center' }}>
-        {/* Phone */}
+        {/* Phone bezel — desktop preview only */}
         <div data-screen-label={SCREENS.find(s => s.id === screen)?.label || screen}>
           <IOSDevice width={375} height={812}>
-            <div style={{ width: '100%', height: '100%', position: 'relative' }}>
-              {screenEl}
-              {/* Persistent bottom-tab nav — only on the "destination"
-                  screens (Home / Memories / Profile). Hidden on transactional
-                  flows where the screen-level action button owns the bottom. */}
-              {['home', 'memories', 'profile'].includes(screen) && (
-                <BottomNav
-                  active={screen}
-                  vibe={tweaks.vibe}
-                  onChange={(tab) => {
-                    if (tab === 'create') setScreen('create');
-                    else setScreen(tab);
-                  }}
-                />
-              )}
-            </div>
+            {phoneInner}
           </IOSDevice>
         </div>
 

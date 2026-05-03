@@ -6,7 +6,7 @@
 
 // Bump this on every UI deploy that ships JS/HTML changes — old clients
 // will purge their cached shell on next page load and pull the fresh files.
-const CACHE = 'plot-shell-v11';
+const CACHE = 'plot-shell-v12';
 const SHELL = [
   '/Plot.html',
   '/tokens.js',
@@ -54,8 +54,21 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Cache-first for everything else (JS, JSX, icons).
+  // Stale-while-revalidate for everything else (JS, JSX, icons): serve
+  // the cached version instantly so first paint stays fast, but kick off
+  // a background fetch to refresh the cache for next time. Old code shows
+  // up once after a deploy, then the very next page load is fresh —
+  // without the user having to manually clear cache or hard-refresh.
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request))
+    caches.match(event.request).then((cached) => {
+      const fetchPromise = fetch(event.request).then((res) => {
+        if (res && res.ok) {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(event.request, copy));
+        }
+        return res;
+      }).catch(() => cached);
+      return cached || fetchPromise;
+    })
   );
 });
