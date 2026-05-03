@@ -180,7 +180,40 @@ window.PLOT_API = (function () {
     return call('GET', `/users/${encodeURIComponent(getUserId())}/groups`);
   }
 
-  // ── User profile (name, pronouns, DOB) ───────────────────────────
+  // ── Session (email + "password") ─────────────────────────────────
+  // For the 4-day demo we don't have real auth. The email is stored
+  // locally as a cosmetic session marker; the password is never sent
+  // anywhere or validated. Real Supabase Auth (magic link or OAuth)
+  // is the v1.1 plan — when it lands, swap getEmail() to read from
+  // supabase.auth.getUser() and the rest of the app keeps working.
+  const SESSION_KEY = 'plot_session_v1';
+
+  function getSession() {
+    try {
+      const raw = localStorage.getItem(SESSION_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+
+  function setSession(email) {
+    try {
+      localStorage.setItem(SESSION_KEY, JSON.stringify({
+        email: (email || '').trim().toLowerCase(),
+        signed_in_at: new Date().toISOString(),
+      }));
+    } catch (e) { /* ignore */ }
+  }
+
+  function clearSession() {
+    try { localStorage.removeItem(SESSION_KEY); } catch (e) { /* ignore */ }
+  }
+
+  function getEmail() {
+    const s = getSession();
+    return s ? s.email : null;
+  }
+
+  // ── User profile (name, pronouns, DOB, avatar) ───────────────────
   // For the demo we don't have real auth — identity is the localStorage
   // user_id. The profile fields below are stored on the `users` table
   // server-side AND mirrored in localStorage so the UI is responsive
@@ -202,24 +235,41 @@ window.PLOT_API = (function () {
     return call('GET', `/users/${encodeURIComponent(getUserId())}/profile`);
   }
 
-  async function saveProfile({ name, pronouns, date_of_birth }) {
+  async function saveProfile({ name, pronouns, date_of_birth, avatar }) {
     const body = {
       name: (name || '').trim(),
       pronouns: pronouns || null,
       date_of_birth: date_of_birth || null,
     };
-    const res = await call('PUT', `/users/${encodeURIComponent(getUserId())}/profile`, body);
-    // Cache locally so the next launch can boot straight to Home/Prefs
-    // without waiting on the network.
+    let res;
+    try {
+      res = await call('PUT', `/users/${encodeURIComponent(getUserId())}/profile`, body);
+    } catch (e) {
+      // Backend write failed — still let the user proceed with a
+      // local-only profile so the demo never blocks on connectivity.
+      res = { ...body };
+    }
+    // Avatar is local-only for now (server has no profile-photo column
+    // or Supabase Storage bucket yet — that's a v1.1 feature). Merge it
+    // alongside the server-confirmed fields so the next launch sees both.
+    const existing = getLocalProfile() || {};
     _saveLocalProfile({
-      name: res.name || body.name,
-      pronouns: res.pronouns || body.pronouns,
-      date_of_birth: res.date_of_birth || body.date_of_birth,
+      name: res.name || body.name || existing.name,
+      pronouns: res.pronouns ?? body.pronouns ?? existing.pronouns,
+      date_of_birth: res.date_of_birth || body.date_of_birth || existing.date_of_birth,
+      avatar: avatar !== undefined ? avatar : (existing.avatar || null),
     });
-    // Also update the existing display-name cache so JoinGroup/CreateGroup
+    // Also update the legacy display-name cache so JoinGroup / CreateGroup
     // pre-fill correctly.
     if (res.name) setDisplayName(res.name);
     return res;
+  }
+
+  // Convenience: replace just the avatar without touching other fields.
+  // dataURL is a JPEG produced by compressImageFile (canvas-resized, ~150 KB).
+  function setLocalAvatar(dataURL) {
+    const existing = getLocalProfile() || {};
+    _saveLocalProfile({ ...existing, avatar: dataURL || null });
   }
 
   // ── currentGroup (the group the user is actively planning in) ────
@@ -373,9 +423,15 @@ window.PLOT_API = (function () {
     clearCurrentGroup,
     getDisplayName,
     setDisplayName,
-    // Profile (name, pronouns, DOB)
+    // Profile (name, pronouns, DOB, avatar)
     getLocalProfile,
     fetchProfile,
     saveProfile,
+    setLocalAvatar,
+    // Cosmetic session (email + fake password) — replace with real Auth in v1.1
+    getSession,
+    setSession,
+    clearSession,
+    getEmail,
   };
 })();

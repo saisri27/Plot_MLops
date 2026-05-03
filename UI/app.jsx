@@ -9,30 +9,31 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 }/*EDITMODE-END*/;
 
 const SCREENS = [
-  { id: 'auth',     label: 'Auth' },
-  { id: 'join',     label: 'Join group' },
-  { id: 'home',     label: 'Home' },
-  { id: 'create',   label: 'Create group' },
-  { id: 'prefs',    label: 'Set prefs' },
-  { id: 'lobby',    label: 'Waiting room' },
-  { id: 'recs',     label: 'Recommendations' },
-  { id: 'decision', label: 'Group decision' },
-  { id: 'memories', label: 'Memories' },
-  { id: 'profile',  label: 'Profile' },
+  { id: 'auth',          label: 'Sign in' },
+  { id: 'profile-setup', label: 'Profile setup' },
+  { id: 'join',          label: 'Join group' },
+  { id: 'home',          label: 'Home' },
+  { id: 'create',        label: 'Create group' },
+  { id: 'prefs',         label: 'Set prefs' },
+  { id: 'lobby',         label: 'Waiting room' },
+  { id: 'recs',          label: 'Recommendations' },
+  { id: 'decision',      label: 'Group decision' },
+  { id: 'memories',      label: 'Memories' },
+  { id: 'profile',       label: 'Profile' },
 ];
 
 function PlotApp() {
   const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
-  // Boot screen depends on URL state — see initial-screen logic below.
-  // First-launch users (no cached profile) always see the welcome /
-  // onboarding screen first, even if they came in via a ?join= link;
-  // we'll route them onward after they fill in their name. Returning
-  // users skip straight to the right place.
+  // Boot screen routing — three-stage check:
+  //   1. No session (not signed in) → AuthScreen (email + password).
+  //   2. Signed in but no profile name yet → ProfileSetupScreen.
+  //   3. Otherwise → wherever the URL / saved group context says.
   const [screen, setScreen] = useState(() => {
     const params = new URLSearchParams(window.location.search);
+    const session = window.PLOT_API.getSession();
+    if (!session || !session.email) return 'auth';
     const profile = window.PLOT_API.getLocalProfile();
-    const hasProfile = !!(profile && profile.name);
-    if (!hasProfile) return 'auth';
+    if (!(profile && profile.name)) return 'profile-setup';
     if (params.get('join')) return 'join';
     return window.PLOT_API.getCurrentGroup() ? 'home' : 'prefs';
   });
@@ -360,8 +361,18 @@ function PlotApp() {
     const props = { vibe: tweaks.vibe, iconStyle: tweaks.iconStyle, density: tweaks.density };
     switch (screen) {
       case 'auth':     return <AuthScreen {...props} onContinue={() => {
-        // After onboarding, route to wherever the URL / state says we
-        // should be: a join-link → Join, an existing group → Home, else Prefs.
+        // After signing in / signing up: if this user hasn't filled in
+        // their profile yet, go to ProfileSetup. Otherwise route by
+        // URL / group state.
+        const profile = window.PLOT_API.getLocalProfile();
+        if (!(profile && profile.name)) { setScreen('profile-setup'); return; }
+        if (pendingInviteToken) setScreen('join');
+        else if (currentGroup) setScreen('home');
+        else setScreen('prefs');
+      }} />;
+      case 'profile-setup': return <ProfileSetupScreen {...props} onContinue={() => {
+        // After the user fills in name / pronouns / DOB / avatar, drop
+        // them into wherever the URL / group state says they should be.
         if (pendingInviteToken) setScreen('join');
         else if (currentGroup) setScreen('home');
         else setScreen('prefs');

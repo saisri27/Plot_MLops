@@ -602,36 +602,32 @@ function _hashStr(s) {
 
 function AuthScreen({ vibe, onContinue }) {
   const pal = T2.palette;
-  // Real onboarding form (replaces the half-baked email-magic-link).
-  // Three fields: name (required), pronouns (optional), DOB (optional).
-  // Submit calls /users/{id}/profile and caches in localStorage.
-  const existing = (typeof window !== 'undefined' && window.PLOT_API.getLocalProfile()) || {};
-  const [name, setName] = useState(existing.name || window.PLOT_API.getDisplayName() || '');
-  const [pronouns, setPronouns] = useState(existing.pronouns || '');
-  const [dob, setDob] = useState(existing.date_of_birth || '');
-  const [saving, setSaving] = useState(false);
+  // Looks like a real login: email + password + sign in / sign up tabs.
+  // Doesn't actually validate the password — it's stored locally as a
+  // cosmetic session marker for the demo. Profile fields (name / DOB /
+  // pronouns / avatar) are collected on a separate post-auth screen.
+  const existingSession = (typeof window !== 'undefined' && window.PLOT_API.getSession()) || null;
+  const [mode, setMode] = useState('signin');                       // 'signin' | 'signup'
+  const [email, setEmail] = useState(existingSession?.email || '');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  const validPassword = password.length >= 6;
+  const canSubmit = validEmail && validPassword && !submitting;
 
   async function handleSubmit() {
-    if (!name.trim() || saving) return;
-    setSaving(true);
+    if (!canSubmit) return;
+    setSubmitting(true);
     setError(null);
-    try {
-      await window.PLOT_API.saveProfile({
-        name: name.trim(),
-        pronouns: pronouns.trim() || null,
-        date_of_birth: dob || null,
-      });
-      onContinue();
-    } catch (e) {
-      // Profile save is best-effort. If the network fails, still let the
-      // user in (we cached display name locally) and surface a soft error.
-      window.PLOT_API.setDisplayName(name.trim());
-      setError(String(e.message || e));
-      onContinue();
-    } finally {
-      setSaving(false);
-    }
+    // No server round-trip yet — just persist the session locally.
+    // When real Supabase Auth lands, this becomes:
+    //   await supabase.auth.signInWithPassword({email, password})
+    // and we read the JWT-derived user_id from the session.
+    window.PLOT_API.setSession(email.trim());
+    setSubmitting(false);
+    onContinue();
   }
 
   return (
@@ -783,23 +779,50 @@ function AuthScreen({ vibe, onContinue }) {
             flexDirection: 'column',
             gap: 10,
           }}>
+            {/* Sign in / Sign up tabs — purely cosmetic right now since
+                the underlying flow is the same for both, but visually
+                this matches what users expect from a real auth screen. */}
             <div style={{
-              fontFamily: '"JetBrains Mono", monospace',
-              fontSize: 9,
-              color: pal.inkMute,
-              letterSpacing: '0.1em',
-              textTransform: 'uppercase',
-            }}>welcome — tell us who you are</div>
+              display: 'flex', gap: 4, padding: 3,
+              background: 'rgba(0,0,0,0.04)',
+              borderRadius: T2.radii.pill,
+              marginBottom: 4,
+            }}>
+              {['signin', 'signup'].map((m) => {
+                const active = mode === m;
+                return (
+                  <button
+                    key={m}
+                    onClick={() => setMode(m)}
+                    style={{
+                      flex: 1, height: 32,
+                      borderRadius: T2.radii.pill,
+                      border: 'none',
+                      background: active ? pal.cream : 'transparent',
+                      color: active ? pal.ink : pal.inkSoft,
+                      fontFamily: 'Inter, sans-serif',
+                      fontSize: 12, fontWeight: 600,
+                      letterSpacing: '0.02em',
+                      boxShadow: active ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+                      cursor: 'pointer',
+                      textTransform: 'capitalize',
+                    }}>
+                    {m === 'signin' ? 'Sign in' : 'Sign up'}
+                  </button>
+                );
+              })}
+            </div>
 
             <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Your name"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@email.com"
               autoFocus
+              autoComplete="email"
               style={{
                 width: '100%',
-                height: 42,
+                height: 44,
                 padding: '0 12px',
                 background: pal.cream,
                 border: `1px solid ${pal.line}`,
@@ -811,47 +834,25 @@ function AuthScreen({ vibe, onContinue }) {
               }}
             />
 
-            <div style={{ display: 'flex', gap: 8 }}>
-              <select
-                value={pronouns}
-                onChange={(e) => setPronouns(e.target.value)}
-                style={{
-                  flex: 1,
-                  height: 42,
-                  padding: '0 10px',
-                  background: pal.cream,
-                  border: `1px solid ${pal.line}`,
-                  borderRadius: T2.radii.md,
-                  fontFamily: 'Inter, sans-serif',
-                  fontSize: 13, color: pal.ink,
-                  outline: 'none',
-                  boxSizing: 'border-box',
-                }}>
-                <option value="">Pronouns (optional)</option>
-                <option value="she/her">she/her</option>
-                <option value="he/him">he/him</option>
-                <option value="they/them">they/them</option>
-                <option value="prefer not to say">prefer not to say</option>
-              </select>
-              <input
-                type="date"
-                value={dob}
-                onChange={(e) => setDob(e.target.value)}
-                placeholder="Birthday"
-                style={{
-                  flex: 1,
-                  height: 42,
-                  padding: '0 10px',
-                  background: pal.cream,
-                  border: `1px solid ${pal.line}`,
-                  borderRadius: T2.radii.md,
-                  fontFamily: 'Inter, sans-serif',
-                  fontSize: 13, color: pal.ink,
-                  outline: 'none',
-                  boxSizing: 'border-box',
-                }}
-              />
-            </div>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Password (min 6 chars)"
+              autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
+              style={{
+                width: '100%',
+                height: 44,
+                padding: '0 12px',
+                background: pal.cream,
+                border: `1px solid ${pal.line}`,
+                borderRadius: T2.radii.md,
+                fontFamily: 'Inter, sans-serif',
+                fontSize: 15, fontWeight: 500, color: pal.ink,
+                outline: 'none',
+                boxSizing: 'border-box',
+              }}
+            />
 
             {error && (
               <div style={{
@@ -859,28 +860,211 @@ function AuthScreen({ vibe, onContinue }) {
                 fontSize: 11,
                 color: pal.terracottaD,
               }}>
-                Saved locally, but couldn't reach the server.
+                {error}
               </div>
             )}
 
             <button
               onClick={handleSubmit}
-              disabled={!name.trim() || saving}
+              disabled={!canSubmit}
               style={{
                 width: '100%',
                 height: 46,
-                background: name.trim() ? pal.terracotta : pal.line,
-                color: name.trim() ? pal.cream : pal.inkMute,
+                background: canSubmit ? pal.terracotta : pal.line,
+                color: canSubmit ? pal.cream : pal.inkMute,
                 border: 'none',
                 borderRadius: T2.radii.pill,
                 fontFamily: 'Inter, sans-serif',
                 fontSize: 15, fontWeight: 600,
-                cursor: name.trim() ? 'pointer' : 'default',
+                cursor: canSubmit ? 'pointer' : 'default',
               }}>
-              {saving ? 'Saving…' : 'Get started →'}
+              {submitting
+                ? (mode === 'signin' ? 'Signing in…' : 'Creating account…')
+                : (mode === 'signin' ? 'Sign in →' : 'Create account →')}
             </button>
+
+            <div style={{
+              fontFamily: 'Inter, sans-serif',
+              fontSize: 11,
+              color: pal.inkMute,
+              textAlign: 'center',
+              marginTop: 2,
+            }}>
+              {mode === 'signin'
+                ? <span>Forgot password? <span style={{ textDecoration: 'underline', cursor: 'pointer' }}>Reset</span></span>
+                : <span>By continuing you agree to be a fun friend.</span>}
+            </div>
           </div>
 
+        </div>
+      </div>
+    </ScreenShell>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────
+// 1b. ProfileSetupScreen — shown once, right after a first-time
+// sign-up, to collect the user's name, pronouns, DOB, and (optional)
+// avatar. Subsequent edits happen on the regular ProfileScreen.
+// ─────────────────────────────────────────────────────────────
+function ProfileSetupScreen({ vibe, onContinue }) {
+  const pal = T2.palette;
+  const existing = window.PLOT_API.getLocalProfile() || {};
+  const [name, setName] = useState(existing.name || window.PLOT_API.getDisplayName() || '');
+  const [pronouns, setPronouns] = useState(existing.pronouns || '');
+  const [dob, setDob] = useState(existing.date_of_birth || '');
+  const [avatar, setAvatar] = useState(existing.avatar || null);
+  const [saving, setSaving] = useState(false);
+  const fileInputRef = React.useRef(null);
+
+  function pickPhoto() {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+      fileInputRef.current.click();
+    }
+  }
+
+  async function onPhotoChosen(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    try {
+      const dataURL = await window.PLOT_API.compressImageFile(file, 480, 0.78);
+      setAvatar(dataURL);
+    } catch (err) { /* ignore — keep existing avatar */ }
+  }
+
+  async function handleSubmit() {
+    if (!name.trim() || saving) return;
+    setSaving(true);
+    try {
+      await window.PLOT_API.saveProfile({
+        name: name.trim(),
+        pronouns: pronouns || null,
+        date_of_birth: dob || null,
+        avatar: avatar || null,
+      });
+    } catch (e) { /* saveProfile is itself best-effort */ }
+    setSaving(false);
+    onContinue();
+  }
+
+  return (
+    <ScreenShell vibe={vibe} bg={pal.cream} padTop={50}>
+      <div style={{ padding: '8px 24px 0', marginBottom: 24 }}>
+        <SectionLabel vibe={vibe}>Welcome to Plot</SectionLabel>
+      </div>
+
+      <div style={{ padding: '0 24px' }}>
+        <div style={{
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 30, fontWeight: 500,
+          letterSpacing: '-0.02em', color: pal.ink,
+          lineHeight: 1.1, marginBottom: 6,
+        }}>
+          Tell us about you.
+        </div>
+        <div style={{
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 14, color: pal.inkSoft, marginBottom: 28,
+        }}>
+          This is how your friends will see you in the group.
+        </div>
+
+        {/* Avatar — tap to upload */}
+        <div style={{
+          display: 'flex', justifyContent: 'center', marginBottom: 22,
+        }}>
+          <button
+            onClick={pickPhoto}
+            aria-label="Add a profile photo"
+            style={{
+              width: 96, height: 96, borderRadius: '50%',
+              border: `2px dashed ${avatar ? 'transparent' : pal.terracotta}`,
+              background: avatar ? pal.cream : pal.terracottaL,
+              cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: 0, overflow: 'hidden',
+              boxShadow: avatar ? '0 4px 12px rgba(42,36,32,0.10)' : 'none',
+            }}>
+            {avatar ? (
+              <img src={avatar} alt="Your photo" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            ) : (
+              <span style={{
+                fontFamily: 'Inter, sans-serif',
+                fontSize: 11, fontWeight: 600,
+                color: pal.terracottaD,
+                letterSpacing: '0.04em',
+                textTransform: 'uppercase',
+              }}>+ Photo</span>
+            )}
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            capture="user"
+            onChange={onPhotoChosen}
+            style={{ display: 'none' }}
+          />
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Your name"
+            autoFocus
+            maxLength={80}
+            style={{
+              width: '100%', height: 46, padding: '0 14px',
+              background: pal.cream, border: `1px solid ${pal.line}`,
+              borderRadius: T2.radii.md,
+              fontFamily: 'Inter, sans-serif', fontSize: 16, fontWeight: 500,
+              color: pal.ink, outline: 'none', boxSizing: 'border-box',
+            }}
+          />
+          <select
+            value={pronouns}
+            onChange={(e) => setPronouns(e.target.value)}
+            style={{
+              width: '100%', height: 46, padding: '0 12px',
+              background: pal.cream, border: `1px solid ${pal.line}`,
+              borderRadius: T2.radii.md,
+              fontFamily: 'Inter, sans-serif', fontSize: 14, color: pal.ink,
+              outline: 'none', boxSizing: 'border-box',
+            }}>
+            <option value="">Pronouns (optional)</option>
+            <option value="she/her">she/her</option>
+            <option value="he/him">he/him</option>
+            <option value="they/them">they/them</option>
+            <option value="prefer not to say">prefer not to say</option>
+          </select>
+          <input
+            type="date"
+            value={dob}
+            onChange={(e) => setDob(e.target.value)}
+            placeholder="Birthday (optional)"
+            style={{
+              width: '100%', height: 46, padding: '0 12px',
+              background: pal.cream, border: `1px solid ${pal.line}`,
+              borderRadius: T2.radii.md,
+              fontFamily: 'Inter, sans-serif', fontSize: 14, color: pal.ink,
+              outline: 'none', boxSizing: 'border-box',
+            }}
+          />
+        </div>
+
+        <div style={{ marginTop: 28 }}>
+          <PrimaryButton
+            vibe={vibe}
+            tone="terracotta"
+            onClick={handleSubmit}
+            disabled={!name.trim() || saving}
+          >
+            {saving ? 'Saving…' : 'Continue →'}
+          </PrimaryButton>
         </div>
       </div>
     </ScreenShell>
@@ -2278,11 +2462,33 @@ function ProfileScreen({ vibe, iconStyle, currentGroup, onLeaveGroup, onBack }) 
   const [name, setName] = useState(localProfile.name || window.PLOT_API.getDisplayName() || '');
   const [pronouns, setPronouns] = useState(localProfile.pronouns || '');
   const [dob, setDob] = useState(localProfile.date_of_birth || '');
+  const [avatar, setAvatar] = useState(localProfile.avatar || null);
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileSavedAt, setProfileSavedAt] = useState(null);
   const displayName = name || 'You';
+  const sessionEmail = window.PLOT_API.getEmail();
+  const fileInputRef = React.useRef(null);
 
   const toggle = (id) => setDefaults((s) => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
+
+  function pickAvatar() {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+      fileInputRef.current.click();
+    }
+  }
+
+  async function onAvatarChosen(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    try {
+      const dataURL = await window.PLOT_API.compressImageFile(file, 480, 0.78);
+      setAvatar(dataURL);
+      // Persist immediately so the change survives a refresh even if the
+      // user doesn't tap Save afterwards. Avatar is local-only for now.
+      window.PLOT_API.setLocalAvatar(dataURL);
+    } catch (err) { /* ignore — keep existing avatar */ }
+  }
 
   async function handleSaveProfile() {
     if (!name.trim() || savingProfile) return;
@@ -2292,6 +2498,7 @@ function ProfileScreen({ vibe, iconStyle, currentGroup, onLeaveGroup, onBack }) 
         name: name.trim(),
         pronouns: pronouns || null,
         date_of_birth: dob || null,
+        avatar: avatar || null,
       });
       setProfileSavedAt(Date.now());
     } catch (e) {
@@ -2300,6 +2507,13 @@ function ProfileScreen({ vibe, iconStyle, currentGroup, onLeaveGroup, onBack }) 
     } finally {
       setSavingProfile(false);
     }
+  }
+
+  function handleSignOut() {
+    window.PLOT_API.clearSession();
+    // Hard reload — easiest way to drop back to the AuthScreen and reset
+    // any in-memory React state cleanly.
+    window.location.reload();
   }
 
   return (
@@ -2313,21 +2527,75 @@ function ProfileScreen({ vibe, iconStyle, currentGroup, onLeaveGroup, onBack }) 
       </div>
 
       <div style={{ padding: '0 24px' }}>
-        {/* Avatar + name — display name pulled from localStorage. The
-            "email" line shows a short device id so users have some sense
-            of which account this phone is signed into during testing. */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 28 }}>
-          <Avatar name={displayName} color="terracotta" size={64} vibe={vibe} />
-          <div>
+        {/* Header — uploadable avatar (tap to change) + display name +
+            session email. Sits right under the page title so the avatar
+            reads as the "logo" of this profile. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 22 }}>
+          <button
+            onClick={pickAvatar}
+            aria-label="Change profile photo"
+            style={{
+              width: 72, height: 72, borderRadius: '50%',
+              border: 'none',
+              padding: 0,
+              cursor: 'pointer',
+              overflow: 'hidden',
+              background: 'transparent',
+              flexShrink: 0,
+              boxShadow: '0 4px 12px rgba(42,36,32,0.10)',
+            }}>
+            {avatar ? (
+              <img
+                src={avatar}
+                alt={displayName}
+                style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+              />
+            ) : (
+              // No upload yet — fall back to the colored letter Avatar
+              // primitive so the layout still has a visual anchor.
+              <Avatar name={displayName} color="terracotta" size={72} vibe={vibe} />
+            )}
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            capture="user"
+            onChange={onAvatarChosen}
+            style={{ display: 'none' }}
+          />
+          <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{
               fontFamily: 'Inter, sans-serif',
               fontSize: 22, fontWeight: 500,
               letterSpacing: '-0.01em',
               color: pal.ink,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
             }}>{displayName}</div>
-            <div style={{ fontFamily: '"JetBrains Mono", monospace', fontSize: 11, color: pal.inkSoft }}>
-              {window.PLOT_API.getUserId()}
+            <div style={{
+              fontFamily: 'Inter, sans-serif',
+              fontSize: 12, color: pal.inkSoft,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}>
+              {sessionEmail || 'no email'}
             </div>
+            <button
+              onClick={handleSignOut}
+              style={{
+                marginTop: 4,
+                padding: 0,
+                background: 'transparent',
+                border: 'none',
+                color: pal.terracottaD,
+                fontFamily: 'Inter, sans-serif',
+                fontSize: 11, fontWeight: 600,
+                textDecoration: 'underline',
+                cursor: 'pointer',
+              }}>Sign out</button>
           </div>
         </div>
 
@@ -2500,7 +2768,8 @@ function ProfileScreen({ vibe, iconStyle, currentGroup, onLeaveGroup, onBack }) 
 
 // Export
 Object.assign(window, {
-  AuthScreen, JoinGroupScreen, WaitingRoomScreen, HomeScreen, CreateGroupScreen,
+  AuthScreen, ProfileSetupScreen,
+  JoinGroupScreen, WaitingRoomScreen, HomeScreen, CreateGroupScreen,
   SetPrefsScreen, RecsScreen, GroupDecisionScreen,
   MemoriesScreen, ProfileScreen,
 });
