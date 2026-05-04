@@ -2,7 +2,7 @@
 
 ## Plot demo
 
-<video src="assets/TechnicalPitch_Plot.mp4" controls width="100%"></video>
+https://github.com/user-attachments/assets/5f21561c-dff5-48d1-b652-23974b1b6329
 
 ---
 
