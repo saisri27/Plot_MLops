@@ -1,5 +1,11 @@
 # Plot
 
+## Plot demo
+
+<video src="assets/TechnicalPitch_Plot.mp4" controls width="100%"></video>
+
+---
+
 Group date and hangout planner for San Francisco. Plot helps two or more people coordinate outings — dinner, events, activities — by merging everyone's preferences (budget, cuisine, distance, availability) and recommending ranked options pulled from live venue and event data.
 
 Built as an MLOps class project. See [INFRASTRUCTURE.md](INFRASTRUCTURE.md) for the full system design, GCP stack, and cost justification.
