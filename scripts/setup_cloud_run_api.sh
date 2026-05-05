@@ -98,8 +98,8 @@ gcloud run deploy "$SERVICE" \
   --memory=512Mi \
   --concurrency=80 \
   --timeout=30s \
-  --max-instances=5 \
-  --min-instances=0 \
+  --max-instances=50 \
+  --min-instances=1 \
   --port=8080 \
   --set-env-vars="$ENV_STRING"
 
