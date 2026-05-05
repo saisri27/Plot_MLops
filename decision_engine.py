@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
+from time import monotonic
 from typing import Any
 
 from dotenv import load_dotenv
@@ -29,7 +31,7 @@ load_dotenv()  # loads .env from project root automatically; must run before mod
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
-from fastapi import FastAPI, HTTPException  # noqa: E402
+from fastapi import Depends, FastAPI, HTTPException, Request  # noqa: E402
 from recommendation_bigquery import (  # noqa: E402
     fetch_events_from_bigquery,
     fetch_venues_from_bigquery,
@@ -76,6 +78,29 @@ app = FastAPI(
     description="Recommends venues and events for group hangouts",
     version="0.3.0",
 )
+
+# Per-IP rate limiter (in-memory sliding window). Applied via Depends() to
+# expensive endpoints only — light reads (/health, GET /groups/{id}) stay
+# unlimited so UI polling doesn't trip the limit.
+_RATE_LIMIT_PER_MIN = 100
+_rate_buckets: dict[str, deque[float]] = defaultdict(deque)
+
+
+def rate_limit(request: Request) -> None:
+    """FastAPI dependency: 100 requests / 60s / IP. Raises 429 when exceeded."""
+    ip = request.client.host if request.client else "unknown"
+    now = monotonic()
+    bucket = _rate_buckets[ip]
+    cutoff = now - 60.0
+    while bucket and bucket[0] < cutoff:
+        bucket.popleft()
+    if len(bucket) >= _RATE_LIMIT_PER_MIN:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit: {_RATE_LIMIT_PER_MIN} requests/minute per IP.",
+        )
+    bucket.append(now)
+
 
 # Permissive CORS for local demo pages (demo.html). Tighten in production.
 app.add_middleware(
@@ -582,45 +607,21 @@ def admin_llm_cost(days: int = 7):
         raise HTTPException(status_code=500, detail=f"Cost query failed: {exc}") from exc
 
 
-@app.post("/recommend", response_model=RecommendResponse)
-def recommend(request: RecommendRequest):
+def _do_recommend(body: RecommendRequest) -> RecommendResponse:
     """
-    Main recommendation endpoint.
-
-    Send one or more users' preferences → get back ranked venues from BigQuery.
-
-    Example body (single user):
-    {
-      "users": [
-        {
-          "user_id": "user_001",
-          "budget": "medium",
-          "categories": ["Food & Drink", "Outdoors"],
-          "max_distance_km": 5.0
-        }
-      ],
-      "top_k": 5
-    }
-
-    Example body (group of 3):
-    {
-      "users": [
-        {"user_id": "u1", "budget": "low",    "categories": ["Food & Drink"], "max_distance_km": 3.0},
-        {"user_id": "u2", "budget": "medium", "categories": ["Outdoors"],     "max_distance_km": 6.0},
-        {"user_id": "u3", "budget": "medium", "categories": ["Food & Drink", "Entertainment"], "max_distance_km": 5.0}
-      ],
-      "top_k": 5
-    }
+    Core recommend pipeline. Extracted from the HTTP route so /recommend and
+    /groups/{id}/recommend can both use it without slowapi double-counting
+    rate-limit hits when one route calls the other.
     """
     # 1. Merge group preferences
-    merged = merge_preferences(request.users)
+    merged = merge_preferences(body.users)
     merged_budget = merged["merged_budget"]
     merged_max_distance = merged["merged_max_distance"]
     all_categories = merged["all_categories"]
 
     logger.info(
         "Recommend request | group_size=%d | budget=%s | max_dist=%.1f km | categories=%s",
-        len(request.users),
+        len(body.users),
         merged_budget,
         merged_max_distance,
         all_categories,
@@ -642,7 +643,7 @@ def recommend(request: RecommendRequest):
             merged_budget=merged_budget,
             merged_max_distance_km=merged_max_distance,
             merged_categories=all_categories,
-            group_size=len(request.users),
+            group_size=len(body.users),
             venues_scored=0,
             recommendations=[],
         )
@@ -653,13 +654,13 @@ def recommend(request: RecommendRequest):
         merged_budget,
         merged_max_distance,
         merged["category_weights"],
-        group_size=len(request.users),
+        group_size=len(body.users),
         all_categories=all_categories,
     )
     candidates = ranked[:TOP_N_FOR_LLM]
 
     # 5. LLM rerank (with full v0 fallback)
-    outcome = _run_llm_rerank(candidates, merged, len(request.users), request.top_k)
+    outcome = _run_llm_rerank(candidates, merged, len(body.users), body.top_k)
 
     # The model_version stamped on the recommendation_log row reflects what
     # actually ranked the final list. LLM tag wins when LLM ran; otherwise
@@ -673,7 +674,7 @@ def recommend(request: RecommendRequest):
 
     # 6. DB log (best-effort, returns None on any failure)
     rec_id = _log_recommend_best_effort(
-        request,
+        body,
         merged_budget,
         merged_max_distance,
         all_categories,
@@ -687,7 +688,7 @@ def recommend(request: RecommendRequest):
         merged_budget=merged_budget,
         merged_max_distance_km=merged_max_distance,
         merged_categories=all_categories,
-        group_size=len(request.users),
+        group_size=len(body.users),
         venues_scored=len(venues),
         model_version=effective_model_version,
         recommendations=[VenueResult(**v) for v in outcome.final],
@@ -696,6 +697,16 @@ def recommend(request: RecommendRequest):
         prompt_version=outcome.prompt_version,
         llm_latency_ms=outcome.llm_latency_ms,
     )
+
+
+@app.post("/recommend", response_model=RecommendResponse, dependencies=[Depends(rate_limit)])
+def recommend(request: RecommendRequest):
+    """
+    Main recommendation endpoint. Rate-limited to 100 req/min per IP.
+
+    Send one or more users' preferences → get back ranked venues from BigQuery.
+    """
+    return _do_recommend(request)
 
 
 @app.post("/feedback")
@@ -738,22 +749,10 @@ def feedback(request: FeedbackRequest):
         raise HTTPException(status_code=500, detail=f"DB write failed: {exc}") from exc
 
 
-@app.post("/events", response_model=EventsResponse)
+@app.post("/events", response_model=EventsResponse, dependencies=[Depends(rate_limit)])
 def events(request: EventsRequest):
     """
-    Upcoming Ticketmaster events near SF, filtered by category + distance + date.
-
-    Past events are filtered at the SQL boundary so callers never see stale rows.
-    Distance is normalized to km in the output (the events table stores miles).
-
-    Example:
-      {
-        "categories": ["Entertainment", "Arts & Culture"],
-        "max_distance_km": 15,
-        "days_ahead": 30,
-        "max_price": 100,
-        "top_k": 10
-      }
+    Upcoming Ticketmaster events near SF. Rate-limited to 100 req/min per IP.
     """
     try:
         rows = fetch_events_from_bigquery(
@@ -962,14 +961,14 @@ def groups_get(group_id: str):
     }
 
 
-@app.post("/groups/{group_id}/recommend", response_model=RecommendResponse)
+@app.post(
+    "/groups/{group_id}/recommend",
+    response_model=RecommendResponse,
+    dependencies=[Depends(rate_limit)],
+)
 def groups_recommend(group_id: str, request: GroupRecommendRequest):
     """
-    Group-aware recommendation. We pull all members' prefs from
-    group_members, build a synthetic RecommendRequest with a UserPreference
-    per member who has set their prefs, and run the existing /recommend
-    pipeline. Members who haven't set prefs yet are skipped (they'll join
-    the merged set once they do).
+    Group-aware recommendation. Rate-limited to 100 req/min per IP.
     """
     _require_db()
     g = get_group(group_id)
@@ -1000,7 +999,7 @@ def groups_recommend(group_id: str, request: GroupRecommendRequest):
             "set prefs before the group can get recommendations.",
         )
 
-    response = recommend(RecommendRequest(users=user_prefs, top_k=request.top_k))
+    response = _do_recommend(RecommendRequest(users=user_prefs, top_k=request.top_k))
 
     # Stamp the rec_id on the group so all members' phones know which rec
     # to vote on (the next /groups/{id} poll picks it up).
@@ -1120,18 +1119,12 @@ def users_groups(user_id: str):
     }
 
 
-@app.post("/parse", response_model=ParseIntentResponse)
+@app.post("/parse", response_model=ParseIntentResponse, dependencies=[Depends(rate_limit)])
 def parse(request: ParseIntentRequest):
     """
-    Free-text → structured prefs that /recommend already accepts.
-
-    Example:
-      { "free_text": "chill cocktail night, no clubs" }
-      → {"budget":"medium","max_distance_km":5.0,"categories":["Food & Drink","Nightlife"], ...}
-
-    Falls back to safe defaults if OPENAI_API_KEY is unset or the call fails,
-    so the demo never blocks. The frontend uses the result to pre-fill the
-    per-user chips/sliders; the user can still tweak before hitting /recommend.
+    Free-text → structured prefs. Rate-limited to 100 req/min per IP. Falls
+    back to safe defaults if OPENAI_API_KEY is unset or the call fails, so
+    the demo never blocks.
     """
     if not llm_intent.OPENAI_AVAILABLE:
         d = llm_intent.DEFAULT_INTENT
