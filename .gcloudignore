@@ -1,0 +1,45 @@
+# When this file exists, gcloud uses it INSTEAD of .gitignore + .dockerignore
+# for deciding what to upload to Cloud Build. Critical: .gitignore excludes
+# models/, but the API image needs the trained .joblib baked in.
+#
+# .dockerignore inside the image still trims the layer for COPY commands.
+
+.git/
+.gitignore
+.gcloudignore
+
+# secrets — never upload
+.env
+.env.*
+plot-scraper-key.json
+
+# dev clutter
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.claude/
+.DS_Store
+.vscode/
+.idea/
+
+# heavy / not needed at API runtime
+mlruns/
+training_data/
+notebooks/
+node_modules/
+Data_scraping /
+UI/
+demo/
+FastAPI/
+docs/
+tests/
+.github/
+
+# docs / artifacts
+*.md
+*.html
+*.pdf
+*.zip
+today_progress.html
+build_training_data.py
