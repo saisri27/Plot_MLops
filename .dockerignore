@@ -21,7 +21,6 @@ Data_scraping /
 notebooks/
 training_data/
 mlruns/
-models/
 demo/
 UI/
 tests/
