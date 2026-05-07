@@ -23,12 +23,11 @@ window.PLOT_API = (function () {
     food:     'Food & Drink',
     outdoors: 'Outdoors',
     ent:      'Entertainment',
-    arts:     'Arts & Culture',
+    arts:     'Arts & Workshops',
     night:    'Nightlife',
     sports:   'Sports & Recreation',
     wellness: 'Wellness & Beauty',
     shop:     'Shopping',
-    classes:  'Classes & Workshops',
     pets:     'Pets & Animals',
     music:    'Music & Live Shows',
   };

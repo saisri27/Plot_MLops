@@ -100,10 +100,23 @@ def fetch_venues_from_bigquery(
     categories: list[str],
     max_distance_km: float,
     *,
+    user_lat: float | None = None,
+    user_lng: float | None = None,
     client: bigquery.Client | None = None,
 ) -> list[dict[str, Any]]:
     """
     Load venue candidates for recommendation scoring.
+
+    Two distance modes:
+      - With user_lat / user_lng: compute distance dynamically from the
+        user's actual location to each venue using BigQuery's geography
+        functions, then filter on that. This is what makes "venues
+        within 5 km" mean "5 km from where I am".
+      - Without: fall back to the legacy static `distance_km` column,
+        which the scraper computes relative to a fixed SF grid center.
+        Adequate when the user is somewhere in central SF; meaningless
+        otherwise. Kept as a fallback for callers that haven't passed
+        location yet (older clients, dev tools, /events without prefs).
 
     Returns dicts compatible with decision_engine.compute_score:
       name, category, rating, distance_km, price_level (low|medium|high),
@@ -112,24 +125,68 @@ def fetch_venues_from_bigquery(
     if not categories:
         return []
 
-    query = f"""
-        SELECT
-            display_name AS name,
-            category,
-            AVG(rating)        AS rating,
-            MIN(distance_km)   AS distance_km,
-            MAX(price_level)   AS price_level,
-            AVG(latitude)      AS latitude,
-            AVG(longitude)     AS longitude,
-            MAX(google_maps_uri)     AS google_maps_uri,
-            MAX(editorial_summary)   AS editorial_summary
-        FROM {_venues_fqn()}
-        WHERE distance_km IS NOT NULL
-          AND distance_km <= @max_distance
-          AND rating IS NOT NULL
-          AND category IN UNNEST(@categories)
-        GROUP BY display_name, category
-    """
+    has_user_loc = user_lat is not None and user_lng is not None
+    params: list = [
+        bigquery.ScalarQueryParameter("max_distance", "FLOAT64", max_distance_km),
+        bigquery.ArrayQueryParameter("categories", "STRING", categories),
+    ]
+
+    if has_user_loc:
+        # Compute distance per row from the user's lat/lng to each venue's
+        # stored lat/lng. ST_DISTANCE returns meters; we convert to km in
+        # the SELECT so downstream code keeps working.
+        params.append(bigquery.ScalarQueryParameter("user_lat", "FLOAT64", float(user_lat)))
+        params.append(bigquery.ScalarQueryParameter("user_lng", "FLOAT64", float(user_lng)))
+        query = f"""
+            WITH venue_avg AS (
+                SELECT
+                    display_name AS name,
+                    category,
+                    AVG(rating)         AS rating,
+                    MAX(price_level)    AS price_level,
+                    AVG(latitude)       AS latitude,
+                    AVG(longitude)      AS longitude,
+                    MAX(google_maps_uri)     AS google_maps_uri,
+                    MAX(editorial_summary)   AS editorial_summary
+                FROM {_venues_fqn()}
+                WHERE rating IS NOT NULL
+                  AND latitude  IS NOT NULL
+                  AND longitude IS NOT NULL
+                  AND category IN UNNEST(@categories)
+                GROUP BY display_name, category
+            )
+            SELECT
+                name, category, rating, price_level, latitude, longitude,
+                google_maps_uri, editorial_summary,
+                ST_DISTANCE(
+                    ST_GEOGPOINT(longitude, latitude),
+                    ST_GEOGPOINT(@user_lng, @user_lat)
+                ) / 1000.0 AS distance_km
+            FROM venue_avg
+            WHERE ST_DISTANCE(
+                ST_GEOGPOINT(longitude, latitude),
+                ST_GEOGPOINT(@user_lng, @user_lat)
+            ) / 1000.0 <= @max_distance
+        """
+    else:
+        query = f"""
+            SELECT
+                display_name AS name,
+                category,
+                AVG(rating)        AS rating,
+                MIN(distance_km)   AS distance_km,
+                MAX(price_level)   AS price_level,
+                AVG(latitude)      AS latitude,
+                AVG(longitude)     AS longitude,
+                MAX(google_maps_uri)     AS google_maps_uri,
+                MAX(editorial_summary)   AS editorial_summary
+            FROM {_venues_fqn()}
+            WHERE distance_km IS NOT NULL
+              AND distance_km <= @max_distance
+              AND rating IS NOT NULL
+              AND category IN UNNEST(@categories)
+            GROUP BY display_name, category
+        """
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
             bigquery.ScalarQueryParameter("max_distance", "FLOAT64", max_distance_km),

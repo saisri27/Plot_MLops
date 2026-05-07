@@ -4,6 +4,106 @@
 const T = window.PLOT_TOKENS;
 
 // ─────────────────────────────────────────────────────────────
+// CategoryIcon — line-art SVG per category, brand-tinted, single color.
+// Replaces emoji rendering for a calmer, more aesthetic chip system.
+// All icons share the same 24×24 viewBox and 1.6 stroke for consistency.
+// ─────────────────────────────────────────────────────────────
+function CategoryIcon({ id, size = 28, color = T.palette.lilacD }) {
+  const sw = 1.6;
+  const p = {
+    width: size,
+    height: size,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: color,
+    strokeWidth: sw,
+    strokeLinecap: 'round',
+    strokeLinejoin: 'round',
+  };
+  switch (id) {
+    case 'food': // coffee cup with steam
+      return (
+        <svg {...p}>
+          <path d="M5 9h12v5a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4V9z" />
+          <path d="M17 10h2a2 2 0 0 1 0 4h-2" />
+          <path d="M8 4c0 1.2 1 1.2 1 2.5M11 4c0 1.2 1 1.2 1 2.5" />
+        </svg>
+      );
+    case 'outdoors': // mountain peaks + sun
+      return (
+        <svg {...p}>
+          <path d="M3 19l5-9 4 6 3-4 6 7" />
+          <circle cx="17" cy="6" r="1.6" />
+        </svg>
+      );
+    case 'ent': // ticket
+      return (
+        <svg {...p}>
+          <path d="M4 8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4V8z" />
+          <path d="M14 7v10" strokeDasharray="2 2" />
+        </svg>
+      );
+    case 'arts': // paint brush + palette dot
+      return (
+        <svg {...p}>
+          <path d="M14 4l6 6-7 7-3 1 1-3 3-3" />
+          <path d="M9 14l-4 4-1 3 3-1 4-4" />
+          <circle cx="6" cy="6" r="1" />
+        </svg>
+      );
+    case 'night': // moon
+      return (
+        <svg {...p}>
+          <path d="M20 14a8 8 0 1 1-8-10 6 6 0 0 0 8 10z" />
+        </svg>
+      );
+    case 'sports': // ball with seam
+      return (
+        <svg {...p}>
+          <circle cx="12" cy="12" r="9" />
+          <path d="M3 12c4 0 8-2 9-9" />
+          <path d="M21 12c-4 0-8 2-9 9" />
+        </svg>
+      );
+    case 'wellness': // lotus / leaf
+      return (
+        <svg {...p}>
+          <path d="M12 21c-5-3-8-7-8-12 4 0 7 3 8 7 1-4 4-7 8-7 0 5-3 9-8 12z" />
+          <path d="M12 16v5" />
+        </svg>
+      );
+    case 'shop': // shopping bag
+      return (
+        <svg {...p}>
+          <path d="M5 8h14l-1 12H6L5 8z" />
+          <path d="M9 8V6a3 3 0 0 1 6 0v2" />
+        </svg>
+      );
+    case 'pets': // paw print
+      return (
+        <svg {...p}>
+          <circle cx="6.5" cy="9" r="1.4" />
+          <circle cx="10" cy="6" r="1.4" />
+          <circle cx="14" cy="6" r="1.4" />
+          <circle cx="17.5" cy="9" r="1.4" />
+          <path d="M8 16c0-2.5 2-4 4-4s4 1.5 4 4-1.5 4-4 4-4-1.5-4-4z" />
+        </svg>
+      );
+    case 'music': // beamed eighth notes
+      return (
+        <svg {...p}>
+          <circle cx="7" cy="18" r="2" />
+          <circle cx="17" cy="16" r="2" />
+          <path d="M9 18V6l10-2v12" />
+          <path d="M9 8l10-2" />
+        </svg>
+      );
+    default:
+      return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 // Striped placeholder — honest design-y stand-in for imagery
 // ─────────────────────────────────────────────────────────────
 function StripedPlaceholder({ label, height = 200, tone = 'terracotta', radius = T.radii.md, vibe = 'editorial' }) {
@@ -88,7 +188,7 @@ function IconChip({ category, selected = false, onClick, size = 'md', vibe = 'ed
           border: `1.5px solid ${selected ? tintD : pal.line}`,
           background: selected ? tintL : pal.cream,
           color: selected ? tintD : pal.ink,
-          fontFamily: 'Inter, system-ui, sans-serif',
+          fontFamily: '"Bricolage Grotesque", system-ui, sans-serif',
           fontSize: 13,
           fontWeight: 500,
           cursor: 'pointer',
@@ -121,13 +221,14 @@ function IconChip({ category, selected = false, onClick, size = 'md', vibe = 'ed
         width: sizes.circle,
         height: sizes.circle,
         borderRadius: vibe === 'playful' ? T.radii.lg : T.radii.pill,
-        background: selected ? (isFilled ? tint : tintL) : pal.creamSoft,
+        // Selected state: tinted background ring around the chip so the
+        // emoji-as-icon stays readable against any device's emoji
+        // rendering (Apple, Google, Microsoft all differ slightly).
+        background: selected ? tintL : pal.creamSoft,
         border: `${vibe === 'playful' ? 2 : 1.5}px solid ${selected ? tintD : pal.line}`,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        color: selected ? (isFilled ? pal.cream : tintD) : pal.inkSoft,
-        fontSize: sizes.icon,
         transform: selected && vibe === 'playful' ? 'rotate(-3deg)' : 'none',
         transition: 'all 150ms ease',
         boxShadow: selected && vibe === 'playful'
@@ -136,16 +237,20 @@ function IconChip({ category, selected = false, onClick, size = 'md', vibe = 'ed
             ? `0 2px 8px ${tint}33`
             : 'none',
       }}>
+        {/* Line-art SVG icon, brand-tinted. Single-color minimalist
+            illustrations for a calmer, more aesthetic chip system. */}
         <CategoryIcon
           id={cat.id}
-          size={sizes.icon}
-          color={selected ? (isFilled ? pal.cream : tintD) : pal.inkSoft}
-          fillStyle={isFilled ? 'filled' : 'outline'}
+          size={Math.round(sizes.circle * 0.55)}
+          color={selected ? tintD : pal.lilacD}
         />
+        <span role="img" aria-label={cat.label} style={{ position: 'absolute', left: -9999 }}>
+          {cat.emoji}
+        </span>
       </div>
       {showLabel && (
         <span style={{
-          fontFamily: 'Inter, system-ui, sans-serif',
+          fontFamily: '"Bricolage Grotesque", system-ui, sans-serif',
           fontSize: sizes.label,
           fontWeight: 500,
           letterSpacing: '0.02em',
@@ -185,7 +290,7 @@ function YayNahhButtons({ onYay, onNahh, vibe = 'editorial', vote = null, size =
           border: `${vibe === 'playful' ? 2 : 1.5}px solid ${tint}`,
           background: isSelected ? tint : (isOther ? pal.creamSoft : tintL),
           color: isSelected ? pal.cream : tint,
-          fontFamily: 'Inter, system-ui, sans-serif',
+          fontFamily: '"Bricolage Grotesque", system-ui, sans-serif',
           fontSize: isLg ? 17 : 14,
           fontWeight: 600,
           letterSpacing: '0.01em',
@@ -291,7 +396,7 @@ function VenueCard({ venue, vibe = 'editorial', density = 'loose', onYay, onNahh
           display: 'flex',
           alignItems: 'center',
           gap: 6,
-          fontFamily: 'Inter, system-ui, sans-serif',
+          fontFamily: '"Bricolage Grotesque", system-ui, sans-serif',
           fontSize: 11,
           fontWeight: 600,
           letterSpacing: '0.02em',
@@ -336,7 +441,7 @@ function VenueCard({ venue, vibe = 'editorial', density = 'loose', onYay, onNahh
               background: pal.ink,
               color: pal.cream,
               borderRadius: T.radii.pill,
-              fontFamily: 'Inter, system-ui, sans-serif',
+              fontFamily: '"Bricolage Grotesque", system-ui, sans-serif',
               fontSize: 12,
               fontWeight: 600,
               textDecoration: 'none',
@@ -352,7 +457,7 @@ function VenueCard({ venue, vibe = 'editorial', density = 'loose', onYay, onNahh
       {/* Text zone — minimal */}
       <div style={{ padding: cardPad, paddingTop: 12 }}>
         <div style={{
-          fontFamily: 'Inter, system-ui, sans-serif',
+          fontFamily: '"Bricolage Grotesque", system-ui, sans-serif',
           fontSize: 19,
           fontWeight: 500,
           letterSpacing: '-0.01em',
@@ -363,7 +468,7 @@ function VenueCard({ venue, vibe = 'editorial', density = 'loose', onYay, onNahh
           {venue.name}
         </div>
         <div style={{
-          fontFamily: 'Inter, system-ui, sans-serif',
+          fontFamily: '"Bricolage Grotesque", system-ui, sans-serif',
           fontSize: 12,
           fontWeight: 500,
           color: pal.inkMute,
@@ -375,7 +480,7 @@ function VenueCard({ venue, vibe = 'editorial', density = 'loose', onYay, onNahh
           {venue.price ? ` · ${'$'.repeat(venue.price)}` : ''}
         </div>
         <div style={{
-          fontFamily: 'Inter, system-ui, sans-serif',
+          fontFamily: '"Bricolage Grotesque", system-ui, sans-serif',
           fontSize: 13,
           fontWeight: 400,
           color: pal.inkSoft,
@@ -415,7 +520,7 @@ function VibeInput({ value, onChange, onParse, vibe = 'editorial', parsing = fal
           background: 'transparent',
           resize: 'none',
           outline: 'none',
-          fontFamily: 'Inter, system-ui, sans-serif',
+          fontFamily: '"Bricolage Grotesque", system-ui, sans-serif',
           fontSize: 15,
           lineHeight: 1.4,
           color: pal.ink,
@@ -440,7 +545,7 @@ function VibeInput({ value, onChange, onParse, vibe = 'editorial', parsing = fal
             border: 'none',
             background: value && !parsing ? pal.ink : pal.line,
             color: value && !parsing ? pal.cream : pal.inkMute,
-            fontFamily: 'Inter, system-ui, sans-serif',
+            fontFamily: '"Bricolage Grotesque", system-ui, sans-serif',
             fontSize: 12,
             fontWeight: 600,
             letterSpacing: '0.02em',
@@ -473,7 +578,7 @@ function BudgetChip({ value, onChange, vibe = 'editorial' }) {
               border: `1.5px solid ${active ? pal.terracottaD : pal.line}`,
               background: active ? pal.terracottaL : pal.creamSoft,
               color: active ? pal.terracottaD : pal.inkMute,
-              fontFamily: 'Inter, system-ui, sans-serif',
+              fontFamily: '"Bricolage Grotesque", system-ui, sans-serif',
               fontSize: 17,
               fontWeight: 600,
               cursor: 'pointer',
@@ -583,7 +688,7 @@ function Avatar({ name, color = 'sage', size = 36, vote = null, vibe = 'editoria
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        fontFamily: 'Inter, system-ui, sans-serif',
+        fontFamily: '"Bricolage Grotesque", system-ui, sans-serif',
         fontSize: size * 0.42,
         fontWeight: 600,
         letterSpacing: '0.02em',
@@ -650,7 +755,7 @@ function PrimaryButton({ children, onClick, disabled = false, vibe = 'editorial'
         border: `${vibe === 'playful' ? 2 : 0}px solid ${pal.ink}`,
         background: disabled ? pal.line : bg,
         color: disabled ? pal.inkMute : pal.cream,
-        fontFamily: 'Inter, system-ui, sans-serif',
+        fontFamily: '"Bricolage Grotesque", system-ui, sans-serif',
         fontSize: 16,
         fontWeight: 600,
         letterSpacing: '0.01em',

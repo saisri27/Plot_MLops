@@ -101,17 +101,20 @@ function ScreenShell({ children, header, footer, vibe = 'editorial', bg, padTop 
 // ─────────────────────────────────────────────────────────────
 function PlotWordmark({ size = 56, ink, terracotta, vibe }) {
   // P-l-o-t with the "o" replaced by a navigator map-pin glyph
-  // Pin sized to match cap-height so it reads as a letter, with negative margins to tighten spacing.
+  // Pin sized to match cap-height so it reads as a letter. Letter-
+  // spacing slightly positive (was -0.05em which made the letters
+  // collide with the pin glyph; +0.005em now gives the wordmark
+  // air without making it feel airy).
   const pinW = size * 0.78;
   const pinH = size * 1.0;
   return (
     <div style={{
       display: 'inline-flex',
       alignItems: 'flex-start',
-      fontFamily: 'Inter, system-ui, sans-serif',
+      fontFamily: '"Bricolage Grotesque", system-ui, sans-serif',
       fontSize: size,
       fontWeight: 700,
-      letterSpacing: '-0.05em',
+      letterSpacing: '0.005em',
       color: ink,
       lineHeight: 1,
     }}>
@@ -119,10 +122,12 @@ function PlotWordmark({ size = 56, ink, terracotta, vibe }) {
       <span style={{
         position: 'relative',
         display: 'inline-block',
-        width: pinW * 0.78,         // narrower visual footprint than full SVG
+        // Slightly wider footprint + small symmetric margins so the
+        // pin glyph sits with breathing room on both sides.
+        width: pinW * 0.84,
         height: size,
-        marginLeft: -size * 0.04,
-        marginRight: -size * 0.04,
+        marginLeft: size * 0.025,
+        marginRight: size * 0.025,
         verticalAlign: 'top',
       }}>
         <svg
@@ -704,7 +709,11 @@ function AuthScreen({ vibe, onContinue }) {
           sf · friend group hangouts
         </div>
 
-        {/* ── SF Hero image — fills bottom ~60% ─────────────────── */}
+        {/* ── SF skyline silhouette — inline SVG so it never 404s.
+              Reads as an intentional editorial illustration (Golden
+              Gate Bridge + downtown silhouette + bay) rather than a
+              missing photo placeholder. Fills the bottom ~60% of the
+              splash like the original photo did. ──────────────────── */}
         <div style={{
           position: 'absolute',
           left: 0, right: 0, bottom: 0,
@@ -712,21 +721,81 @@ function AuthScreen({ vibe, onContinue }) {
           zIndex: 1,
           overflow: 'hidden',
         }}>
-          <img
-            src="assets/sf-hero.png"
-            alt="Friends watching the SF skyline"
+          {/* Sky gradient — peachy SF golden-hour */}
+          <div style={{
+            position: 'absolute', inset: 0,
+            background: `linear-gradient(to bottom, ${pal.peachL} 0%, ${pal.terracottaL} 55%, ${pal.cream} 100%)`,
+            maskImage: 'linear-gradient(to bottom, transparent 0%, black 18%, black 100%)',
+            WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 18%, black 100%)',
+          }} />
+          {/* Skyline + bridge silhouette */}
+          <svg
+            viewBox="0 0 375 360"
+            preserveAspectRatio="xMidYEnd slice"
             style={{
               position: 'absolute',
               left: 0, right: 0, bottom: 0,
-              width: '100%',
-              height: '100%',
-              objectFit: 'cover',
-              objectPosition: 'center 35%',
+              width: '100%', height: '100%',
               display: 'block',
-              maskImage: 'linear-gradient(to bottom, transparent 0%, black 12%, black 100%)',
-              WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 12%, black 100%)',
             }}
-          />
+            aria-label="San Francisco skyline at golden hour">
+            {/* Faint sun disc */}
+            <circle cx="295" cy="120" r="42" fill={pal.peach} opacity="0.55" />
+            {/* Hills behind */}
+            <path d="M0 240 C 60 200, 120 215, 180 220 C 240 225, 300 195, 375 215 L 375 360 L 0 360 Z"
+                  fill={pal.sage} opacity="0.55" />
+            {/* Closer rolling hills */}
+            <path d="M0 270 C 50 240, 110 255, 175 260 C 250 268, 310 245, 375 260 L 375 360 L 0 360 Z"
+                  fill={pal.sageD} opacity="0.7" />
+            {/* Golden Gate Bridge — left tower + cables */}
+            <g fill={pal.terracottaD} stroke={pal.terracottaD}>
+              <rect x="40" y="180" width="6" height="120" />
+              <rect x="34" y="178" width="18" height="6" />
+              <rect x="34" y="200" width="18" height="6" />
+              <path d="M46 184 Q 100 226, 155 234" stroke={pal.terracottaD} strokeWidth="2" fill="none" />
+              <path d="M46 230 L 155 254" stroke={pal.terracottaD} strokeWidth="1.5" fill="none" />
+              {/* Right tower */}
+              <rect x="155" y="220" width="5" height="80" />
+              <rect x="151" y="219" width="13" height="5" />
+              <rect x="151" y="236" width="13" height="5" />
+              {/* Bridge deck */}
+              <rect x="0" y="296" width="375" height="3" />
+            </g>
+            {/* Downtown buildings — boxy abstract */}
+            <g fill={pal.ink}>
+              <rect x="195" y="240" width="14" height="60" />
+              <rect x="212" y="225" width="11" height="75" />
+              <rect x="226" y="232" width="12" height="68" />
+              <rect x="241" y="218" width="14" height="82" />
+              <rect x="258" y="244" width="9" height="56" />
+              <rect x="270" y="228" width="13" height="72" />
+              <rect x="286" y="248" width="10" height="52" />
+              <rect x="299" y="222" width="14" height="78" />
+              <rect x="316" y="240" width="11" height="60" />
+              <rect x="330" y="232" width="13" height="68" />
+              <rect x="346" y="246" width="11" height="54" />
+              {/* Coit Tower-ish little tower */}
+              <rect x="178" y="234" width="8" height="66" />
+              <circle cx="182" cy="232" r="5" />
+            </g>
+            {/* Tiny window dots warm-lit */}
+            <g fill={pal.peach}>
+              {[
+                [200,260],[202,275],[218,250],[218,270],[230,255],[230,275],
+                [246,238],[246,260],[246,280],[262,265],[275,260],[275,280],
+                [290,272],[305,245],[305,275],[321,260],[336,250],[336,275],[350,270],
+                [180,250],[182,272],
+              ].map(([x,y], i) => <rect key={i} x={x} y={y} width="2" height="2" />)}
+            </g>
+            {/* Bay water glints */}
+            <g stroke={pal.cream} strokeWidth="1" opacity="0.45">
+              <line x1="20" y1="320" x2="55" y2="320" />
+              <line x1="80" y1="335" x2="120" y2="335" />
+              <line x1="160" y1="328" x2="195" y2="328" />
+              <line x1="220" y1="338" x2="255" y2="338" />
+              <line x1="280" y1="325" x2="320" y2="325" />
+            </g>
+          </svg>
         </div>
 
         {/* Decorative bottom-left peach blob (in front of photo) */}
