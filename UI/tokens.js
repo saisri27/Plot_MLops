@@ -2,32 +2,32 @@
 // 11 categories, 2 themes (Editorial-Craft, Playful-Zine), shared palette base.
 
 window.PLOT_TOKENS = (function () {
-  // ── Color palette (warm SF cafes + outdoor markets) ─────────────
+  // ── Color palette (PREVIEW — design spec v1: indigo + lavender + pink) ──
   const palette = {
-    cream:       '#F2EEE8',  // soft off-white, slight cool warm balance
-    creamDeep:   '#E5DED2',  // surfaces
-    creamSoft:   '#F8F5EF',  // cards
-    ink:         '#2A2420',  // primary text
-    inkSoft:     '#5A4F46',  // secondary text
-    inkMute:     '#8B7E72',  // tertiary
-    line:        '#DDD4C2',  // hairlines
-    lineSoft:    '#E5DED2',
-    terracotta:  '#C25A3C',  // primary
-    terracottaD: '#A6452A',  // pressed
-    terracottaL: '#E8BFAF',  // selected fill
-    sage:        '#8FA67A',  // secondary
+    cream:       '#E8E2F4',  // light lavender surface (page bg)
+    creamDeep:   '#D6CCE8',  // surfaces
+    creamSoft:   '#F4F0FA',  // cards
+    ink:         '#1E1B4B',  // primary text — deep indigo
+    inkSoft:     '#4A3C6B',  // secondary text
+    inkMute:     '#7B6BAF',  // tertiary
+    line:        '#C9BDE0',  // hairlines
+    lineSoft:    '#D6CCE8',
+    terracotta:  '#E85E75',  // primary (pink-red action)
+    terracottaD: '#C2435C',  // pressed
+    terracottaL: '#F8C6D0',  // selected fill
+    sage:        '#8FA67A',  // secondary (kept for category differentiation)
     sageD:       '#6E8659',
     sageL:       '#D6E0C7',
-    lilac:       '#B7A6D6',  // accent
-    lilacD:      '#9783BD',
-    lilacL:      '#E5DEF1',
-    peach:       '#F4C674',  // highlight
+    lilac:       '#A995E1',  // accent — lavender
+    lilacD:      '#8775BD',
+    lilacL:      '#D6CCE8',
+    peach:       '#F4C674',  // highlight (kept for category differentiation)
     peachD:      '#D9A551',
     peachL:      '#FBE8C2',
-    yay:         '#6E8659',  // sage-dark
-    nahh:        '#C25A3C',  // terracotta
+    yay:         '#A995E1',  // lavender (was sage-dark)
+    nahh:        '#E85E75',  // pink-red (was terracotta)
     white:       '#FFFFFF',
-    black:       '#1A1612',
+    black:       '#1E1B4B',
   };
 
   // ── 4-step type scale ───────────────────────────────────────────
@@ -43,19 +43,22 @@ window.PLOT_TOKENS = (function () {
   const radii = { sm: 8, md: 14, lg: 20, xl: 28, pill: 999 };
 
   // ── 11 Categories ───────────────────────────────────────────────
-  // Each category: id, label, glyph (single character / shape), color tint
+  // Each category: id, label, glyph (legacy decorative char), emoji
+  // (kawaii illustration shown in chips/cards), and color tint.
+  // The emoji column matches the cute illustrated reference style the
+  // user sketched out — iOS / Mac users see Apple's emoji which has
+  // exactly that look, Android sees Google's, both are recognizable.
   const categories = [
-    { id: 'food',     label: 'Food & Drink',       glyph: '◐', color: 'terracotta' },
-    { id: 'outdoors', label: 'Outdoors',           glyph: '▲', color: 'sage' },
-    { id: 'ent',      label: 'Entertainment',      glyph: '▶', color: 'lilac' },
-    { id: 'arts',     label: 'Arts & Culture',     glyph: '◆', color: 'peach' },
-    { id: 'night',    label: 'Nightlife',          glyph: '◑', color: 'lilac' },
-    { id: 'sports',   label: 'Sports & Rec',       glyph: '●', color: 'sage' },
-    { id: 'wellness', label: 'Wellness & Beauty',  glyph: '✿', color: 'peach' },
-    { id: 'shop',     label: 'Shopping',           glyph: '◧', color: 'terracotta' },
-    { id: 'classes',  label: 'Classes & Workshops',glyph: '✚', color: 'sage' },
-    { id: 'pets',     label: 'Pets & Animals',     glyph: '❀', color: 'peach' },
-    { id: 'music',    label: 'Music & Live Shows', glyph: '♪', color: 'lilac' },
+    { id: 'food',     label: 'Food & Drink',       glyph: '◐', emoji: '🍔', color: 'terracotta' },
+    { id: 'outdoors', label: 'Outdoors',           glyph: '▲', emoji: '🏞️', color: 'sage' },
+    { id: 'ent',      label: 'Entertainment',      glyph: '▶', emoji: '🎬', color: 'lilac' },
+    { id: 'arts',     label: 'Arts & Workshops',   glyph: '◆', emoji: '🎨', color: 'peach' },
+    { id: 'night',    label: 'Nightlife',          glyph: '◑', emoji: '🪩', color: 'lilac' },
+    { id: 'sports',   label: 'Sports & Rec',       glyph: '●', emoji: '🏀', color: 'sage' },
+    { id: 'wellness', label: 'Wellness & Beauty',  glyph: '✿', emoji: '🧘', color: 'peach' },
+    { id: 'shop',     label: 'Shopping',           glyph: '◧', emoji: '🛍️', color: 'terracotta' },
+    { id: 'pets',     label: 'Pets & Animals',     glyph: '❀', emoji: '🐶', color: 'peach' },
+    { id: 'music',    label: 'Music & Live Shows', glyph: '♪', emoji: '🎵', color: 'lilac' },
   ];
 
   return { palette, type, space, radii, categories };

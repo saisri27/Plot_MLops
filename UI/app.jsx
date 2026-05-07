@@ -424,7 +424,7 @@ function PlotApp() {
         inset: 0,
         background: pal.cream,
         color: pal.ink,
-        fontFamily: 'Inter, system-ui, sans-serif',
+        fontFamily: '"Bricolage Grotesque", system-ui, sans-serif',
         overflow: 'hidden',
       }}>
         {phoneInner}
@@ -441,7 +441,7 @@ function PlotApp() {
       alignItems: 'flex-start',
       justifyContent: 'center',
       padding: '32px 20px',
-      fontFamily: 'Inter, system-ui, sans-serif',
+      fontFamily: '"Bricolage Grotesque", system-ui, sans-serif',
       position: 'relative',
     }}>
       {/* Backdrop type label — desktop preview only */}
