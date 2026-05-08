@@ -50,7 +50,7 @@ def _bq_client() -> bigquery.Client:
 # "Family"/"Film" feed.
 SEGMENT_TO_CATEGORY: dict[str, str] = {
     "Music": "Music & Live Shows",
-    "Arts & Theatre": "Arts & Culture",
+    "Arts & Theatre": "Arts & Workshops",
     "Sports": "Sports & Recreation",
     "Family": "Entertainment",
     "Film": "Entertainment",
@@ -220,7 +220,7 @@ def fetch_events_from_bigquery(
 
     Args:
         categories: user-selected canonical categories (e.g. ["Entertainment",
-            "Arts & Culture"]). Empty list returns []. We SELECT all upcoming
+            "Arts & Workshops"]). Empty list returns []. We SELECT all upcoming
             events whose Ticketmaster segment maps to one of these.
         max_distance_km: filter on distance_miles converted to km in SQL.
         days_ahead: only include events starting within this many days; clamps
