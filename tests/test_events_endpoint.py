@@ -66,7 +66,7 @@ import recommendation_bigquery as rb  # noqa: E402
     "segment, expected",
     [
         ("Music", "Music & Live Shows"),  # Music has its own chip — 51% of event volume
-        ("Arts & Theatre", "Arts & Culture"),
+        ("Arts & Theatre", "Arts & Workshops"),
         ("Sports", "Sports & Recreation"),
         ("Family", "Entertainment"),
         ("Film", "Entertainment"),
@@ -138,10 +138,10 @@ def test_fetch_events_maps_segment_to_canonical_category():
         },
     ]
     out = rb.fetch_events_from_bigquery(
-        ["Arts & Culture"], 10.0, client=_make_fake_client(fake_rows)
+        ["Arts & Workshops"], 10.0, client=_make_fake_client(fake_rows)
     )
     assert len(out) == 1
-    assert out[0]["category"] == "Arts & Culture"
+    assert out[0]["category"] == "Arts & Workshops"
     assert out[0]["segment"] == "Arts & Theatre"
 
 
