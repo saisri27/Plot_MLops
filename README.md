@@ -1,30 +1,98 @@
 # Plot
 
+Group hangout planner for San Francisco. Two or more people pick their preferences (budget, categories, distance, vibe) — Plot merges them and recommends ranked venues + events from live data.
+
+Built as an end-to-end **MLOps prototype**: data scraping → training → serving with model + LLM rerank → feedback loop → automated weekly retrain → monitoring + backup.
+
+---
+
 ## Plot demo
 
 https://github.com/user-attachments/assets/5f21561c-dff5-48d1-b652-23974b1b6329
 
 ---
 
-Group date and hangout planner for San Francisco. Plot helps two or more people coordinate outings — dinner, events, activities — by merging everyone's preferences (budget, cuisine, distance, availability) and recommending ranked options pulled from live venue and event data.
+## Try it live
 
-Built as an MLOps class project. See [INFRASTRUCTURE.md](INFRASTRUCTURE.md) for the full system design, GCP stack, and cost justification.
+| Service | URL |
+|---|---|
+| **Web app** | https://plot-ui-773940296505.us-central1.run.app |
+| **API** | https://plot-decision-engine-773940296505.us-central1.run.app |
+| **API health** | [`/health`](https://plot-decision-engine-773940296505.us-central1.run.app/health) |
+| **Cost dashboard** | `/admin/llm-cost?days=7` |
+
+Both services run on Google Cloud Run (`min=1` instance, no cold starts; rate-limited 100 req/min/IP).
 
 ---
 
-## Current state
+## Architecture
 
-- System design doc ([INFRASTRUCTURE.md](INFRASTRUCTURE.md))
-- **Decision Engine** FastAPI service v0.3.0: `/`, `/health`, `/recommend`, `/feedback` ([decision_engine.py](decision_engine.py))
-- **BigQuery** venue and event retrieval layer ([recommendation_bigquery.py](recommendation_bigquery.py))
-- **Supabase** user, recommendation-log, and feedback storage ([db.py](db.py))
-- **LLM reranker** (`gpt-4o-mini`) takes the v0 top-20 and produces a final top-K with per-venue reasons; falls back to v0 heuristic on any failure or missing key ([llm_rerank.py](llm_rerank.py), [prompts/rerank_v1.txt](prompts/rerank_v1.txt))
-- **Data scraping** pipelines for Google Places and Ticketmaster ([Data_scraping /README.md](Data_scraping%20/README.md))
-- **Browser demo UI** with a banner showing whether results were LLM-ranked or v0 ([demo/README.md](demo/README.md))
-- **CI** with pytest, ruff lint, and ruff format check on every push and PR ([.github/workflows/ci.yml](.github/workflows/ci.yml))
-- **Tests**: unit tests for scoring / preference merging / price-level normalization, offline LLM rerank tests with a fake OpenAI client, `/recommend` wiring tests with mocked BigQuery + LLM, plus opt-in BigQuery integration tests
+```mermaid
+flowchart LR
+    subgraph Data["Data layer"]
+        Places[Google Places API]
+        TM[Ticketmaster API]
+        BQ[(BigQuery<br/>places_raw)]
+        Mirror[(BigQuery<br/>plot_supabase_mirror)]
+    end
 
-What's coming next: prompt versioning (`rerank_v2`), MLflow prompt registry, eval pipeline that replays logged feedback through prompts, Google Calendar FreeBusy integration, Cloud Run deployment, drift monitoring.
+    subgraph App["Live serving"]
+        UI[Web UI<br/>Cloud Run]
+        API[Decision Engine<br/>FastAPI on Cloud Run]
+        Sup[(Supabase<br/>Postgres)]
+        OAI[OpenAI<br/>gpt-4o-mini]
+    end
+
+    subgraph ML["MLOps loop"]
+        Build[build_training_data.py]
+        Train[train_ranker.py]
+        MLF[MLflow]
+        Models[(models/<br/>plot_ranker_*.joblib)]
+    end
+
+    Places --> BQ
+    TM --> BQ
+
+    UI -->|/recommend| API
+    API -->|fetch venues| BQ
+    API -->|score with v1 GBT<br/>+ LLM rerank| OAI
+    API -->|fallback to v0| API
+    API -->|log| Sup
+
+    Sup -->|weekly join| Build
+    Build --> Train
+    Train --> MLF
+    Train --> Models
+    Models -->|baked into Docker| API
+
+    Sup -->|weekly mirror| Mirror
+```
+
+The trained ranker (sklearn GradientBoosting) loads at API startup, scores candidates, and the LLM reranks the top-20 with gpt-4o-mini. Both layers fall back gracefully — if the model file is missing, v0 heuristic ranks; if OpenAI 429s, v0 ranks.
+
+---
+
+## What's actually there (every box ticked)
+
+| Layer | Implementation |
+|---|---|
+| **Data scraping** | Google Places + Ticketmaster → BigQuery, automated via Cloud Run Jobs + Cloud Scheduler. Manual fallback workflows in `.github/workflows/scrape_*.yml` |
+| **Storage** | Supabase Postgres for users, groups, recommendation_log, feedback, group_votes. `db.py` is plain SQL — swap `DATABASE_URL` to migrate |
+| **API** | FastAPI on Cloud Run. Endpoints: `/recommend`, `/feedback`, `/events`, `/parse`, `/groups/*`, `/admin/llm-cost`, `/health` |
+| **Trained ranker** | `sklearn.GradientBoostingClassifier` trained on real `feedback` rows. Serves at request time via `ranker.py`. `model_version` stamped on every recommendation_log row for A/B comparison |
+| **LLM rerank** | gpt-4o-mini reranks v0 top-20 with per-venue reasons (≈$0.0005/call). Prompt versioning via `prompt_version` field |
+| **LLM intent parser** | `/parse` turns free text ("chill cocktail night") into structured prefs |
+| **Retrain pipeline** | Mondays 07:00 UTC. `build_training_data.py` → Supabase join → `train_ranker.py` → MLflow log → GitHub Release with new `.joblib`. Promotion is manual (drop new artifact in `models/` + redeploy) so a bad week doesn't ship to prod |
+| **Cost monitoring** | `GET /admin/llm-cost?days=7` returns total, p50/p95 latency, daily series, breakdown by `model_version` |
+| **Backup + analytics** | Mondays 08:00 UTC: weekly Supabase → BigQuery mirror so the same SQL workflow can query user data alongside scraped data |
+| **CI/CD** | GitHub Actions: ruff lint + 88 tests on every push, blocked on red. `gcloud builds submit` deploys via Cloud Build |
+| **Demo hardening** | 100 req/min/IP rate limit (FastAPI Depends, in-memory sliding window), Cloud Run `min=1 / max=50` for no cold starts and surge headroom |
+
+---
+
+## Tech stack
+
+**Backend** Python 3.11, FastAPI, Pydantic v2, psycopg2 · **Frontend** React 18 (loaded via Babel standalone — no build step), DM Sans + Bricolage Grotesque · **ML** scikit-learn, pandas, MLflow · **LLM** OpenAI gpt-4o-mini · **Data** Google BigQuery, Supabase Postgres · **Deploy** Google Cloud Run, Artifact Registry, Cloud Build · **CI** GitHub Actions, ruff, pytest, pre-commit
 
 ---
 
@@ -32,113 +100,96 @@ What's coming next: prompt versioning (`rerank_v2`), MLflow prompt registry, eva
 
 | Path | Purpose |
 |------|---------|
-| [decision_engine.py](decision_engine.py) | FastAPI service — group preference merging, venue scoring, LLM rerank wiring, recommendation + feedback endpoints |
-| [llm_rerank.py](llm_rerank.py) | OpenAI-backed reranker that turns the v0 top-20 into a final top-K with per-venue reasons |
-| [prompts/](prompts/) | Versioned prompt templates loaded by the reranker (`rerank_v1.txt`) |
-| [recommendation_bigquery.py](recommendation_bigquery.py) | BigQuery helpers for fetching venues and events |
-| [db.py](db.py) | Supabase (Postgres) layer for users, recommendation logs, and feedback |
-| [INFRASTRUCTURE.md](INFRASTRUCTURE.md) | System design, GCP stack, cost estimate, ML model strategy |
-| [Data_scraping /](Data_scraping%20/) | Google Places + Ticketmaster → BigQuery pipelines |
-| [demo/](demo/) | Standalone browser UI that calls `/recommend` |
-| [tests/](tests/) | Unit tests, offline LLM + `/recommend` tests, opt-in BigQuery integration tests |
-| [FastAPI/](FastAPI/) | Week 1 wine-classifier exercise (legacy, kept for reference) |
-| [.github/workflows/ci.yml](.github/workflows/ci.yml) | GitHub Actions — lint + test on every push / PR |
-| [pyproject.toml](pyproject.toml) | Ruff + pytest config (incl. `live` marker) |
-| [.pre-commit-config.yaml](.pre-commit-config.yaml) | Pre-commit hook running ruff on staged files |
-| [cloudbuild.yaml](cloudbuild.yaml) | Google Cloud Build — builds the Decision Engine Docker image |
+| [decision_engine.py](decision_engine.py) | FastAPI service — preference merging, scoring, LLM rerank wiring, all endpoints |
+| [ranker.py](ranker.py) | Loads trained `.joblib` at startup, scores candidates, falls back to v0 if missing |
+| [llm_rerank.py](llm_rerank.py) | gpt-4o-mini reranker with full v0 fallback |
+| [llm_intent.py](llm_intent.py) | Free-text → structured prefs for `/parse` |
+| [recommendation_bigquery.py](recommendation_bigquery.py) | BigQuery fetchers for venues + events |
+| [db.py](db.py) | Supabase layer (raw SQL via psycopg2) |
+| [build_training_data.py](build_training_data.py) | Joins recommendation_log ⨝ feedback → CSV |
+| [notebooks/train_ranker.py](notebooks/train_ranker.py) | Trains GBT ranker with NDCG@5 vs v0 baseline, logs to MLflow |
+| [categories.py](categories.py) | Single source of truth for the 10 canonical categories |
+| [prompts/](prompts/) | Versioned LLM prompt templates (`rerank_v1.txt`, `parse_intent_v1.txt`) |
+| [UI/](UI/) | React app — chip-based prefs, group lobby, recs, voting, memories |
+| [Data_scraping/](Data_scraping%20/) | Google Places + Ticketmaster → BigQuery pipelines |
+| [scripts/](scripts/) | Idempotent Cloud Run setup scripts + Supabase→BQ mirror |
+| [tests/](tests/) | 88 tests — unit, mocked-integration, opt-in live |
+| [.github/workflows/](.github/workflows/) | CI, weekly retrain, weekly Supabase→BQ mirror, scraper fallbacks |
+| [INFRASTRUCTURE.md](INFRASTRUCTURE.md) | System design, GCP cost model, deployment philosophy |
 
 ---
 
 ## Quick start
 
-Five-minute path to a running local service.
-
 ```bash
 # 1. Setup
 git clone git@github.com:saisri27/Plot_MLops.git
 cd Plot_MLops
-conda create -n plot python=3.11 -y
-conda activate plot
+conda create -n plot python=3.11 -y && conda activate plot
 pip install -r requirements.txt
 pre-commit install
 
 # 2. Credentials
 cp "Data_scraping /.env.example" .env
-# Edit .env: fill in GCP_PROJECT, DATABASE_URL, MLFLOW_TRACKING_URI, OPENAI_API_KEY
-gcloud auth application-default login    # for BigQuery
+# Fill in: GCP_PROJECT, DATABASE_URL, OPENAI_API_KEY, GOOGLE_PLACES_API_KEY, TICKETMASTER_API_KEY
+gcloud auth application-default login    # for BigQuery reads
 
 # 3. Run the API
 uvicorn decision_engine:app --reload --port 8080
 curl http://127.0.0.1:8080/health
 
-# 4. (Optional) Run the browser demo UI
-python3 -m http.server 5500
-# open http://127.0.0.1:5500/demo/demo.html
+# 4. Run the UI (separate terminal)
+cd UI && python3 -m http.server 5500
+# open http://127.0.0.1:5500/Plot.html
 ```
 
-If `/recommend` returns 503 with a BigQuery error, you skipped `gcloud auth application-default login` — the API can't read from BigQuery without it.
+If `/recommend` returns 503 with a BigQuery error, you skipped step 2's ADC login.
 
-### LLM reranker (optional)
-
-Get a key at https://platform.openai.com/api-keys and put it in `.env` as `OPENAI_API_KEY`.
-
-- **With key set**: `/recommend` reranks the v0 top-20 with `gpt-4o-mini` and returns LLM-written reasons. Cost is roughly $0.0005 per call. The demo UI shows an "LLM-ranked" banner above the results, including the model and latency.
-- **Without key**: the engine logs a one-time warning at startup and silently falls back to v0 heuristic ranking. Demo UI shows the "Heuristic ranking (v0)" banner.
-
-The fallback path is also taken on any LLM error (timeout, malformed response, all picks hallucinated), so a flaky API never breaks `/recommend`.
-
-### Response shape
-
-`POST /recommend` returns the top-K recommendations plus rerank metadata:
-
-```
-{
-  "merged_budget": "...", "merged_max_distance_km": ...,
-  "merged_categories": [...], "group_size": ..., "venues_scored": ...,
-  "recommendations": [{"name": "...", "score": ..., "reason": "...", ...}],
-  "used_llm": true,                    // false on v0 fallback
-  "llm_model": "gpt-4o-mini",          // null on fallback
-  "prompt_version": "rerank_v1",       // null on fallback
-  "llm_latency_ms": 812,               // null on fallback
-  "recommendation_log_id": 42          // null when DATABASE_URL is unset
-}
-```
-
-`recommendation_log_id` is the SERIAL id from the `recommendation_log` table — the `/feedback` retraining loop will use it as a join key to reconstruct the candidate set behind each accepted/rejected pick.
+If `OPENAI_API_KEY` isn't set, `/recommend` silently falls back to the trained ranker (or v0 heuristic) with no LLM reasons — the demo still works.
 
 ---
 
 ## Testing
 
 ```bash
-# Unit + offline integration tests, LLM live-test skipped (matches CI behavior)
-pytest tests/ -v -m "not live" --ignore=tests/test_bigquery_integration.py
+# Full suite, mocked live deps (matches CI)
+pytest tests/ -v -m "not live"
 
-# Live OpenAI integration test (needs OPENAI_API_KEY)
+# Lint + format
+ruff check . && ruff format --check .
+
+# Live OpenAI test (needs key)
 pytest tests/test_llm_rerank.py -v -m live
 
-# BigQuery integration tests (opt-in, needs ADC)
+# BigQuery integration (needs ADC)
 RUN_BQ_INTEGRATION=1 pytest tests/test_bigquery_integration.py -v
-
-# Lint + format check
-ruff check .
-ruff format --check .
 ```
 
-Test files in `tests/`:
-
-- `test_decision_engine.py` — scoring, preference merging, price-level normalization
-- `test_recommendation_bigquery.py` — BigQuery helpers with a mocked client
-- `test_llm_rerank.py` — LLM reranker with a fake OpenAI client (offline) plus one `@pytest.mark.live` smoke test
-- `test_decision_engine_with_llm.py` — `/recommend` wiring with both BigQuery and the LLM mocked out, covering both the LLM-success and v0-fallback paths
-- `test_bigquery_integration.py` — opt-in queries against the real `mlops-project-491402.places_raw.*` tables (data-quality assertions)
-
-CI runs lint + `pytest -m "not live"` automatically on every push and pull request. Live LLM tests and BigQuery integration tests are intentionally skipped in CI because they require external credentials.
+**88 tests total** — unit (43), mocked integration (40), live (5). CI runs the non-live subset on every push.
 
 ---
 
-## Architecture
+## Deployment
 
-Three-layer: **Frontend** (React, browser) → **API** (FastAPI Decision Engine on Cloud Run) → **Data** (BigQuery venues/events + Supabase users/feedback + MLflow model registry). Full diagram and per-component justification in [INFRASTRUCTURE.md](INFRASTRUCTURE.md).
+```bash
+# API (rebuilds Docker image with the latest model in models/)
+source .env && bash scripts/setup_cloud_run_api.sh
+
+# UI
+bash scripts/setup_cloud_run_ui.sh
+
+# Scrapers (Cloud Run Jobs + Cloud Scheduler)
+source .env && bash scripts/setup_cloud_run_jobs.sh
+```
+
+All deploy scripts are idempotent — re-run after any code change to roll out a new revision. The API URL stays stable across revisions.
 
 ---
+
+## License
+
+MIT. See [LICENSE](LICENSE) if present, otherwise this is a class-project prototype shared for educational reference.
+
+---
+
+Built for the MSDS-694 / 698 MLOps course. See [INFRASTRUCTURE.md](INFRASTRUCTURE.md) for the full system-design doc and cost justification.

@@ -74,3 +74,10 @@ package-lock.json
 
 # Session-specific HTML scratchpads
 today_progress.html
+
+# Personal design-spec / brief drafts (kept locally, not part of source)
+PROJECT_BRIEF.html
+plot_design_spec.html
+plot_architecture_visual_flow.html.pdf
+Plot — Project Brief.pdf
+*.pdf
