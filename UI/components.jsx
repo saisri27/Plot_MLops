@@ -1,7 +1,283 @@
 // Plot — Components
 // IconChip, StripedPlaceholder, VenueCard, YayNahh, VibeInput, BudgetChip, DistanceSlider
+// + Confetti, Count, ToastHost (interactive polish)
 
 const T = window.PLOT_TOKENS;
+
+// ─────────────────────────────────────────────────────────────
+// Confetti — one-shot burst when `trigger` changes value.
+// Pure-DOM + CSS, no library. Spawns ~32 falling particles that
+// clean themselves up after ~2s. Safe to mount multiple instances.
+// ─────────────────────────────────────────────────────────────
+function Confetti({ trigger }) {
+  const [pieces, setPieces] = React.useState([]);
+  React.useEffect(() => {
+    if (!trigger) return; // don't fire on initial mount
+    const colors = ['#E85E75', '#A995E1', '#F4C674', '#8FA67A', '#1E1B4B'];
+    const next = Array.from({ length: 32 }, (_, i) => ({
+      id: `${trigger}-${i}`,
+      left: Math.random() * 100,
+      delay: Math.random() * 200,
+      dur: 1400 + Math.random() * 900,
+      rot: Math.random() * 720 - 360,
+      color: colors[i % colors.length],
+      shape: Math.random() > 0.5 ? '50%' : '2px',
+      size: 7 + Math.random() * 7,
+    }));
+    setPieces(next);
+    const t = setTimeout(() => setPieces([]), 2400);
+    return () => clearTimeout(t);
+  }, [trigger]);
+  if (!pieces.length) return null;
+  return (
+    <>
+      <style>{`
+        @keyframes plotConfettiFall {
+          0% { transform: translateY(-20px) rotate(0deg); opacity: 1; }
+          100% { transform: translateY(110vh) rotate(var(--rot, 360deg)); opacity: 0.9; }
+        }
+      `}</style>
+      <div style={{
+        position: 'fixed', inset: 0, zIndex: 9999,
+        pointerEvents: 'none', overflow: 'hidden',
+      }}>
+        {pieces.map((p) => (
+          <div key={p.id} style={{
+            position: 'absolute',
+            left: `${p.left}%`,
+            top: -20,
+            width: p.size, height: p.size,
+            background: p.color,
+            borderRadius: p.shape,
+            animation: `plotConfettiFall ${p.dur}ms cubic-bezier(.2,.7,.4,1) ${p.delay}ms forwards`,
+            // CSS variable so each piece spins differently
+            '--rot': `${p.rot}deg`,
+          }} />
+        ))}
+      </div>
+    </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// GroupAvatar — hash-derived color circle with 2-letter initials.
+// Same group name → same color, always. Gives every group a stable
+// visual identity without uploading anything. Slack/Discord style.
+// ─────────────────────────────────────────────────────────────
+function GroupAvatar({ name, size = 44 }) {
+  const pal = T.palette;
+  const colors = [
+    { bg: pal.terracottaD, fg: pal.cream },
+    { bg: pal.lilacD,      fg: pal.cream },
+    { bg: pal.sageD || '#6E8659', fg: pal.cream },
+    { bg: pal.peachD || '#D9A551', fg: pal.cream },
+    { bg: pal.ink,         fg: pal.cream },
+  ];
+  const safe = (name || '?').trim();
+  // djb2-ish hash → stable color per name across reloads
+  let h = 0;
+  for (let i = 0; i < safe.length; i++) h = ((h << 5) - h + safe.charCodeAt(i)) | 0;
+  const color = colors[Math.abs(h) % colors.length];
+  // Initials: first letter of first two words, else first two chars.
+  const words = safe.split(/\s+/).filter(Boolean);
+  const initials = (words.length >= 2
+    ? words[0][0] + words[1][0]
+    : safe.slice(0, 2)).toUpperCase();
+  return (
+    <div style={{
+      width: size, height: size,
+      borderRadius: T.radii.pill,
+      background: color.bg,
+      color: color.fg,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      fontFamily: 'inherit',
+      fontSize: Math.round(size * 0.36),
+      fontWeight: 700,
+      flexShrink: 0,
+      letterSpacing: '0.02em',
+      userSelect: 'none',
+    }}>{initials}</div>
+  );
+}
+
+// Global confetti host — mounted once at app root, listens for
+// window.plotConfetti() calls. This way the burst survives screen
+// transitions (e.g. "We went →" navigates away, but confetti from
+// the old screen still completes because ConfettiHost lives above it).
+if (typeof window !== 'undefined' && !window.plotConfetti) {
+  window.plotConfetti = () => {
+    window.dispatchEvent(new CustomEvent('plot-confetti'));
+  };
+}
+function ConfettiHost() {
+  const [tick, setTick] = React.useState(0);
+  React.useEffect(() => {
+    const handler = () => setTick((t) => t + 1);
+    window.addEventListener('plot-confetti', handler);
+    return () => window.removeEventListener('plot-confetti', handler);
+  }, []);
+  return <Confetti trigger={tick} />;
+}
+
+// ─────────────────────────────────────────────────────────────
+// CoinShower — lightweight gold rain. Pure CSS circles (no emoji,
+// no drop-shadow filter) so mobile GPUs can offload the animation
+// without jank. Fixed-count 10 regardless of tier — keeps perf
+// predictable. Inline radial-gradient gives the 3D coin look.
+// ─────────────────────────────────────────────────────────────
+function CoinShower({ trigger }) {
+  const [pieces, setPieces] = React.useState([]);
+  React.useEffect(() => {
+    if (!trigger) return;
+    const next = Array.from({ length: 10 }, (_, i) => ({
+      id: `${trigger}-${i}`,
+      left: Math.random() * 100,
+      delay: Math.random() * 150,
+      dur: 900 + Math.random() * 500,
+      size: 11 + Math.random() * 5,
+    }));
+    setPieces(next);
+    const t = setTimeout(() => setPieces([]), 1700);
+    return () => clearTimeout(t);
+  }, [trigger]);
+  if (!pieces.length) return null;
+  return (
+    <>
+      <style>{`
+        @keyframes plotCoinFall {
+          0%   { transform: translate3d(0, -30px, 0); opacity: 1; }
+          100% { transform: translate3d(0, 110vh, 0);  opacity: 0.95; }
+        }
+      `}</style>
+      <div style={{
+        position: 'fixed', inset: 0, zIndex: 9999,
+        pointerEvents: 'none', overflow: 'hidden',
+      }}>
+        {pieces.map((p) => (
+          <div key={p.id} style={{
+            position: 'absolute',
+            left: `${p.left}%`,
+            top: -30,
+            width: p.size, height: p.size,
+            borderRadius: '50%',
+            // Radial gradient = inexpensive 3D-coin look, no filter needed
+            background: 'radial-gradient(circle at 35% 30%, #FFE680 0%, #F4C674 45%, #C28A1F 100%)',
+            willChange: 'transform',
+            animation: `plotCoinFall ${p.dur}ms linear ${p.delay}ms forwards`,
+          }} />
+        ))}
+      </div>
+    </>
+  );
+}
+
+if (typeof window !== 'undefined' && !window.plotCoinShower) {
+  window.plotCoinShower = (count = 12) => {
+    window.dispatchEvent(new CustomEvent('plot-coin-shower', { detail: { count } }));
+  };
+}
+function CoinShowerHost() {
+  const [evt, setEvt] = React.useState({ tick: 0, count: 12 });
+  React.useEffect(() => {
+    const handler = (e) => setEvt({ tick: Date.now(), count: (e.detail && e.detail.count) || 12 });
+    window.addEventListener('plot-coin-shower', handler);
+    return () => window.removeEventListener('plot-coin-shower', handler);
+  }, []);
+  return <CoinShower trigger={evt.tick} count={evt.count} />;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Count — animates an integer from 0 → `to` on mount or when
+// `to` changes. ~600ms ease-out via requestAnimationFrame.
+// Use anywhere we display a count we want to feel "alive".
+// ─────────────────────────────────────────────────────────────
+function Count({ to = 0, duration = 600 }) {
+  const [n, setN] = React.useState(0);
+  React.useEffect(() => {
+    if (typeof to !== 'number' || to < 0) { setN(0); return; }
+    if (to === 0) { setN(0); return; }
+    let raf, start;
+    const tick = (now) => {
+      if (!start) start = now;
+      const t = Math.min(1, (now - start) / duration);
+      // ease-out cubic — fast start, gentle landing
+      const eased = 1 - Math.pow(1 - t, 3);
+      setN(Math.round(eased * to));
+      if (t < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [to, duration]);
+  return <>{n}</>;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Toast notifications — single host mounted at app root. Anywhere
+// in the codebase can call `window.plotToast(msg, kind)` and a
+// pill slides up from the bottom. Auto-dismisses after ~2.6s.
+// Implemented via window.dispatchEvent so it works from any handler
+// without React context plumbing.
+// ─────────────────────────────────────────────────────────────
+if (typeof window !== 'undefined' && !window.plotToast) {
+  window.plotToast = (msg, kind = 'info') => {
+    window.dispatchEvent(new CustomEvent('plot-toast', { detail: { msg, kind } }));
+  };
+}
+function ToastHost() {
+  const pal = T.palette;
+  const [toasts, setToasts] = React.useState([]);
+  React.useEffect(() => {
+    const handler = (e) => {
+      const id = Date.now() + Math.random();
+      const t = { id, msg: e.detail.msg, kind: e.detail.kind || 'info' };
+      setToasts((s) => [...s, t]);
+      setTimeout(() => setToasts((s) => s.filter((x) => x.id !== id)), 2600);
+    };
+    window.addEventListener('plot-toast', handler);
+    return () => window.removeEventListener('plot-toast', handler);
+  }, []);
+  if (!toasts.length) return null;
+  const bgFor = (kind) => ({
+    success: pal.sageD || '#2A4D1F',
+    error:   pal.terracottaD,
+    info:    pal.ink,
+  }[kind] || pal.ink);
+  return (
+    <>
+      <style>{`
+        @keyframes plotToastIn {
+          from { transform: translateY(40px); opacity: 0; }
+          to   { transform: translateY(0); opacity: 1; }
+        }
+      `}</style>
+      <div style={{
+        position: 'fixed',
+        bottom: 'calc(20px + env(safe-area-inset-bottom, 0px) + 60px)',
+        left: 0, right: 0,
+        display: 'flex', flexDirection: 'column', alignItems: 'center',
+        gap: 8, zIndex: 9998,
+        pointerEvents: 'none',
+      }}>
+        {toasts.map((t) => (
+          <div key={t.id} style={{
+            background: bgFor(t.kind),
+            color: pal.cream,
+            padding: '11px 18px',
+            borderRadius: T.radii.pill,
+            fontFamily: '"Bricolage Grotesque", system-ui, sans-serif',
+            fontSize: 14, fontWeight: 500,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+            maxWidth: 340,
+            textAlign: 'center',
+            animation: 'plotToastIn 220ms cubic-bezier(.2,.8,.3,1)',
+          }}>{t.msg}</div>
+        ))}
+      </div>
+    </>
+  );
+}
 
 // ─────────────────────────────────────────────────────────────
 // CategoryIcon — line-art SVG per category, brand-tinted, single color.
@@ -570,7 +846,13 @@ function BudgetChip({ value, onChange, vibe = 'editorial' }) {
         return (
           <button
             key={n}
-            onClick={() => onChange(n)}
+            onClick={() => {
+              // Lightweight gold shower (fixed 10 coins, GPU-accelerated).
+              // Subtle buzz makes it feel physical. Both best-effort.
+              try { window.plotCoinShower && window.plotCoinShower(); } catch (e) { /* unsupported */ }
+              try { navigator.vibrate && navigator.vibrate(18); } catch (e) { /* unsupported */ }
+              onChange(n);
+            }}
             style={{
               flex: 1,
               height: 44,

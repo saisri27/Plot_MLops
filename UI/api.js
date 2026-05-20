@@ -142,11 +142,12 @@ window.PLOT_API = (function () {
 
   // ── /groups (multi-user shareable-link sessions) ─────────────────
 
-  function createGroup(name, displayName) {
+  function createGroup(name, displayName, eventDate) {
     return call('POST', '/groups', {
       name,
       creator_user_id: getUserId(),
       creator_display_name: displayName || null,
+      event_date: eventDate || null,
     });
   }
 
@@ -158,6 +159,18 @@ window.PLOT_API = (function () {
     return call('POST', `/groups/${encodeURIComponent(groupId)}/join`, {
       user_id: getUserId(),
       display_name: displayName,
+    });
+  }
+
+  function leaveGroup(groupId) {
+    return call('POST', `/groups/${encodeURIComponent(groupId)}/leave`, {
+      user_id: getUserId(),
+    });
+  }
+
+  function deleteGroup(groupId) {
+    return call('POST', `/groups/${encodeURIComponent(groupId)}/delete`, {
+      user_id: getUserId(),
     });
   }
 
@@ -447,6 +460,8 @@ window.PLOT_API = (function () {
     createGroup,
     peekGroupByToken,
     joinGroupAPI,
+    leaveGroup,
+    deleteGroup,
     setGroupPrefs,
     getGroupState,
     groupRecommend,

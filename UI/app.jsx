@@ -284,11 +284,23 @@ function PlotApp() {
 
   // Profile / Home → "leave group" returns to solo mode. We don't delete
   // the group server-side (other members keep planning); just clear our
-  // local context AND any stale per-group state.
-  function handleLeaveGroup() {
+  // local context AND any stale per-group state. Best-effort call to the
+  // backend to delete our group_members row — if the network fails we still
+  // clear locally so the user isn't stuck staring at a group they wanted
+  // to leave. They'll re-appear in the list on next refresh if the API
+  // call didn't actually land, which is the right safety behavior.
+  async function handleLeaveGroup() {
+    const gid = currentGroup && currentGroup.id;
     _clearGroupSessionState();
     setCurrentGroup(null);
     setScreen('home');
+    if (gid) {
+      try {
+        await window.PLOT_API.leaveGroup(gid);
+      } catch (e) {
+        console.warn('leaveGroup API failed (non-fatal):', e);
+      }
+    }
   }
 
   // "We went" tap on Group Decision: log the strongest feedback signal
@@ -411,6 +423,15 @@ function PlotApp() {
           }}
         />
       )}
+      {/* Global toast notification host. Mounted once at root; any code
+          can fire toasts via window.plotToast(msg, kind). */}
+      <ToastHost />
+      {/* Global confetti host. Mounted at root so window.plotConfetti()
+          works even when the firing screen navigates away mid-animation. */}
+      <ConfettiHost />
+      {/* Global coin-shower host — fires from BudgetChip taps via
+          window.plotCoinShower(count). Same pattern as ConfettiHost. */}
+      <CoinShowerHost />
     </div>
   );
 
