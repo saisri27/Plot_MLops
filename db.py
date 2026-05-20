@@ -538,9 +538,7 @@ def _new_invite_token() -> str:
     return secrets.token_urlsafe(6)
 
 
-def create_group(
-    name: str, created_by: str, event_date: str | None = None
-) -> dict[str, Any]:
+def create_group(name: str, created_by: str, event_date: str | None = None) -> dict[str, Any]:
     """
     Mint a new group + invite token. The creator is added as the first member
     in the same transaction so they immediately show up in /groups/{id}.
