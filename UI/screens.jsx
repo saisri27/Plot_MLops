@@ -1149,6 +1149,8 @@ function HomeScreen({ vibe, currentGroup, onOpenGroup, onCreate, onProfile }) {
   const [groups, setGroups] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
+  const myUserId = window.PLOT_API.getUserId();
 
   // Fetch the user's real groups from the backend on mount and whenever
   // currentGroup changes (creating / joining one bumps the list). Failures
@@ -1162,6 +1164,37 @@ function HomeScreen({ vibe, currentGroup, onOpenGroup, onCreate, onProfile }) {
       .catch((e) => { if (!cancelled) { setError(String(e.message || e)); setLoading(false); } });
     return () => { cancelled = true; };
   }, [currentGroup && currentGroup.id]);
+
+  // Remove a group from this user's view. Creators get a destructive
+  // "Delete for everyone" path (backend enforces 403 if user_id mismatch);
+  // non-creators get the softer "Leave" path that only removes their
+  // group_members row. Both are confirmed with a native prompt and
+  // optimistically remove the card before the API call lands.
+  async function handleRemove(g, evt) {
+    evt.stopPropagation();
+    const isCreator = g.created_by === myUserId;
+    const promptText = isCreator
+      ? `Delete "${g.name}"? This removes the group for everyone — can't be undone.`
+      : `Leave "${g.name}"? You'll stop seeing it on your Plans tab.`;
+    if (!window.confirm(promptText)) return;
+    setDeletingId(g.id);
+    const prev = groups;
+    setGroups((s) => s.filter((x) => x.id !== g.id));
+    try {
+      if (isCreator) {
+        await window.PLOT_API.deleteGroup(g.id);
+        try { window.plotToast && window.plotToast(`Deleted "${g.name}"`, 'success'); } catch (e) { /* ignore */ }
+      } else {
+        await window.PLOT_API.leaveGroup(g.id);
+        try { window.plotToast && window.plotToast(`Left "${g.name}"`, 'info'); } catch (e) { /* ignore */ }
+      }
+    } catch (e) {
+      setGroups(prev);
+      try { window.plotToast && window.plotToast(`Couldn't ${isCreator ? 'delete' : 'leave'} group`, 'error'); } catch (er) { /* ignore */ }
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   function handleOpen(g) {
     // Set this as the active group and route into the prefs flow.
@@ -1201,7 +1234,7 @@ function HomeScreen({ vibe, currentGroup, onOpenGroup, onCreate, onProfile }) {
           <div style={{
             padding: 24, textAlign: 'center',
             fontFamily: 'Inter, sans-serif', fontSize: 13, color: pal.inkSoft,
-          }}>Loading groups…</div>
+          }}>Pulling your plans…</div>
         )}
 
         {!loading && error && (
@@ -1226,7 +1259,7 @@ function HomeScreen({ vibe, currentGroup, onOpenGroup, onCreate, onProfile }) {
             textAlign: 'center',
             marginBottom: 12,
           }}>
-            No groups yet. Tap "New group" and rally the crew.
+            ✨ Your plans live here. Tap "new group" below and round up the crew.
           </div>
         )}
 
@@ -1238,8 +1271,10 @@ function HomeScreen({ vibe, currentGroup, onOpenGroup, onCreate, onProfile }) {
                 key={g.id}
                 onClick={() => handleOpen(g)}
                 style={{
+                  position: 'relative',
                   textAlign: 'left',
-                  padding: '16px',
+                  padding: '14px 16px',
+                  paddingRight: 48,
                   background: isActive ? pal.terracottaL : pal.creamSoft,
                   border: `1px solid ${isActive ? pal.terracotta : pal.line}`,
                   borderRadius: T2.radii.lg,
@@ -1249,42 +1284,101 @@ function HomeScreen({ vibe, currentGroup, onOpenGroup, onCreate, onProfile }) {
                   fontFamily: 'inherit',
                   width: '100%',
                 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
-                  <div style={{
-                    fontFamily: 'Inter, sans-serif',
-                    fontSize: 19, fontWeight: 500,
-                    letterSpacing: '-0.01em', color: pal.ink,
-                  }}>{g.name}</div>
-                  {isActive && (
+                {/* Avatar-left / content-right row. Mail / Slack pattern. */}
+                <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                  <GroupAvatar name={g.name} size={44} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                      <div style={{
+                        fontFamily: 'Inter, sans-serif',
+                        fontSize: 17, fontWeight: 600,
+                        letterSpacing: '-0.01em',
+                        color: pal.ink,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}>{g.name}</div>
+                      {isActive && (
+                        <div style={{
+                          padding: '3px 8px',
+                          borderRadius: T2.radii.pill,
+                          background: pal.terracotta,
+                          color: pal.cream,
+                          fontFamily: '"JetBrains Mono", monospace',
+                          fontSize: 9, fontWeight: 600,
+                          letterSpacing: '0.06em', textTransform: 'uppercase',
+                          flexShrink: 0,
+                        }}>active</div>
+                      )}
+                    </div>
                     <div style={{
-                      padding: '3px 8px',
-                      borderRadius: T2.radii.pill,
-                      background: pal.terracotta,
-                      color: pal.cream,
-                      fontFamily: '"JetBrains Mono", monospace',
-                      fontSize: 9, fontWeight: 600,
-                      letterSpacing: '0.06em', textTransform: 'uppercase',
-                    }}>active</div>
-                  )}
+                      marginTop: 4,
+                      fontFamily: 'Inter, sans-serif', fontSize: 12,
+                      color: pal.inkSoft,
+                    }}>
+                      {g.member_count} member{g.member_count === 1 ? '' : 's'}
+                      {g.last_rec_id ? ' · planning a hangout' : ' · no recs yet'}
+                    </div>
+                    {/* Simple date chip — lives inside the content column
+                        so it lines up under the member-count line, not under
+                        the avatar. */}
+                    {g.event_date && (() => {
+                      const [yy, mm, dd] = g.event_date.split('-').map(Number);
+                      const event = new Date(yy, mm - 1, dd);
+                      const opts = event.getFullYear() === new Date().getFullYear()
+                        ? { weekday: 'short', month: 'short', day: 'numeric' }
+                        : { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' };
+                      const label = event.toLocaleDateString(undefined, opts);
+                      return (
+                        <div style={{
+                          marginTop: 6,
+                          display: 'inline-block',
+                          padding: '3px 9px',
+                          borderRadius: T2.radii.pill,
+                          background: pal.lilacL || pal.creamSoft,
+                          color: pal.lilacD || pal.inkSoft,
+                          fontFamily: 'Inter, sans-serif',
+                          fontSize: 11,
+                          fontWeight: 600,
+                          letterSpacing: '0.01em',
+                        }}>📅 {label}</div>
+                      );
+                    })()}
+                  </div>
                 </div>
-                {/* member dots */}
-                <div style={{ display: 'flex', marginBottom: 8 }}>
-                  {Array.from({ length: Math.min(g.member_count || 1, 6) }).map((_, i) => (
-                    <div key={i} style={{
-                      width: 22, height: 22, borderRadius: T2.radii.pill,
-                      background: ['terracottaL','sageL','lilacL','peachL'].map(k => pal[k])[i % 4],
-                      border: `1.5px solid ${pal.cream}`,
-                      marginLeft: i === 0 ? 0 : -6,
-                    }} />
-                  ))}
-                </div>
-                <div style={{
-                  fontFamily: 'Inter, sans-serif', fontSize: 12,
-                  color: pal.inkSoft,
-                }}>
-                  {g.member_count} member{g.member_count === 1 ? '' : 's'}
-                  {g.last_rec_id ? ' · planning a hangout' : ' · no recs yet'}
-                </div>
+                {/* Remove button — always visible. Creators get destructive
+                    delete (removes for everyone); other members get the
+                    softer leave (removes themselves only). Stops the click
+                    bubbling so tapping it doesn't ALSO open the group. */}
+                {(() => {
+                  const isCreator = g.created_by === myUserId;
+                  return (
+                    <button
+                      onClick={(evt) => handleRemove(g, evt)}
+                      disabled={deletingId === g.id}
+                      aria-label={isCreator ? `Delete ${g.name}` : `Leave ${g.name}`}
+                      title={isCreator ? 'Delete group (you created it)' : 'Leave group'}
+                      style={{
+                        position: 'absolute',
+                        top: 10,
+                        right: 10,
+                        width: 30, height: 30,
+                        borderRadius: T2.radii.pill,
+                        border: `1px solid ${pal.line}`,
+                        background: pal.creamSoft,
+                        color: pal.inkSoft,
+                        fontFamily: 'inherit',
+                        fontSize: 15,
+                        lineHeight: 1,
+                        cursor: deletingId === g.id ? 'wait' : 'pointer',
+                        opacity: deletingId === g.id ? 0.4 : 1,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: 0,
+                      }}>{isCreator ? '🗑' : '↗'}</button>
+                  );
+                })()}
               </button>
             );
           })}
@@ -1320,10 +1414,14 @@ function CreateGroupScreen({ vibe, onBack, onCreated }) {
   const pal = T2.palette;
   const [name, setName] = useState('');
   const [displayName, setDisplayName] = useState(() => window.PLOT_API.getDisplayName());
+  const [eventDate, setEventDate] = useState('');
   const [creating, setCreating] = useState(false);
-  const [created, setCreated] = useState(null);   // {id, name, invite_token}
+  const [created, setCreated] = useState(null);   // {id, name, invite_token, event_date}
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
+  // The native date picker needs `today` as its min value so users can't
+  // schedule a hangout in the past. Computed once at mount.
+  const todayISO = new Date().toISOString().slice(0, 10);
 
   // Build the public share URL from the invite_token. We point at this
   // exact deployed UI (whatever origin the user is on right now) so the
@@ -1340,8 +1438,9 @@ function CreateGroupScreen({ vibe, onBack, onCreated }) {
     const trimmedDisplay = displayName.trim();
     window.PLOT_API.setDisplayName(trimmedDisplay);
     try {
-      const g = await window.PLOT_API.createGroup(trimmedName, trimmedDisplay);
+      const g = await window.PLOT_API.createGroup(trimmedName, trimmedDisplay, eventDate || null);
       setCreated(g);
+      try { window.plotToast && window.plotToast(`"${g.name}" created — share the invite!`, 'success'); } catch (e) { /* ignore */ }
     } catch (err) {
       setError(String(err.message || err));
     } finally {
@@ -1462,6 +1561,37 @@ function CreateGroupScreen({ vibe, onBack, onCreated }) {
               }}
             />
 
+            <div style={{
+              fontFamily: 'Inter, sans-serif',
+              fontSize: 12, fontWeight: 600,
+              color: pal.inkMute,
+              letterSpacing: '0.06em',
+              textTransform: 'uppercase',
+              marginBottom: 6,
+            }}>when's the hangout? <span style={{ textTransform: 'none', fontSize: 11, fontWeight: 400, opacity: 0.7 }}>(optional)</span></div>
+            <input
+              type="date"
+              value={eventDate}
+              min={todayISO}
+              onChange={(e) => setEventDate(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '10px 0',
+                background: 'transparent',
+                border: 'none',
+                borderBottom: `1.5px solid ${pal.line}`,
+                fontFamily: 'Inter, sans-serif',
+                fontSize: 18, fontWeight: 500,
+                color: pal.ink,
+                outline: 'none',
+                marginBottom: 24,
+                boxSizing: 'border-box',
+                // iOS Safari styles the placeholder as light grey by default;
+                // override so it matches the rest of the form when empty.
+                colorScheme: 'light',
+              }}
+            />
+
             {error && (
               <div style={{
                 padding: 12,
@@ -1570,6 +1700,24 @@ function CreateGroupScreen({ vibe, onBack, onCreated }) {
 // ─────────────────────────────────────────────────────────────
 // 4. Set My Prefs (the killer screen)
 // ─────────────────────────────────────────────────────────────
+// Vibe presets — quick-tap chips that pre-fill the entire prefs form.
+// One tap sets categories + budget + distance + a sample vibe text the user
+// can edit. Reduces "what do I even pick?" friction for first-time users.
+const VIBE_PRESETS = [
+  { id: 'date',      label: 'Date night',     emoji: '🌙',
+    categories: ['food', 'arts'],            budget: 3, distance: 5,
+    vibe: 'romantic cocktail spot, quiet enough to talk' },
+  { id: 'brunch',    label: 'Friend brunch',  emoji: '🥐',
+    categories: ['food', 'outdoors'],        budget: 2, distance: 8,
+    vibe: 'chill weekend brunch with patio energy' },
+  { id: 'solo',      label: 'Solo recharge',  emoji: '🧘',
+    categories: ['wellness', 'outdoors'],    budget: 1, distance: 3,
+    vibe: 'calm and restorative, low-budget' },
+  { id: 'night',     label: 'Night out',      emoji: '🪩',
+    categories: ['night', 'food', 'music'],  budget: 3, distance: 4,
+    vibe: 'lively bar, music, going late' },
+];
+
 function SetPrefsScreen({ vibe, iconStyle, density, currentGroup, onBack, onSubmit }) {
   const pal = T2.palette;
   const [selected, setSelected] = useState(['food', 'outdoors', 'arts']);
@@ -1578,8 +1726,23 @@ function SetPrefsScreen({ vibe, iconStyle, density, currentGroup, onBack, onSubm
   const [vibeText, setVibeText] = useState('');
   const [parsing, setParsing] = useState(false);
   const [parseError, setParseError] = useState(null);
+  const [activePreset, setActivePreset] = useState(null);
 
-  const toggle = (id) => setSelected((s) => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
+  const toggle = (id) => {
+    setActivePreset(null); // any manual edit deselects the preset
+    setSelected((s) => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
+  };
+
+  // One-tap pre-fill from a preset. Overrides existing selections —
+  // expected behavior since the user explicitly picked the preset.
+  function applyPreset(p) {
+    setActivePreset(p.id);
+    setSelected(p.categories);
+    setBudget(p.budget);
+    setDistance(p.distance);
+    setVibeText(p.vibe);
+    setParseError(null);
+  }
 
   // Vibe → /parse → prefill chips/budget/distance from the LLM result.
   // Lenient: if the call fails or the model returns junk, we just keep
@@ -1658,12 +1821,51 @@ function SetPrefsScreen({ vibe, iconStyle, density, currentGroup, onBack, onSubm
         <div style={{
           fontFamily: 'Inter, sans-serif',
           fontSize: 13, color: pal.inkSoft,
-          marginBottom: 22,
+          marginBottom: 16,
         }}>
           Pick a few. We'll mix with the group.
         </div>
 
-        {/* Icon chip grid — 11 categories */}
+        {/* Vibe presets — one tap pre-fills categories + budget + distance + vibe text */}
+        <div style={{
+          fontFamily: '"JetBrains Mono", monospace',
+          fontSize: 10, fontWeight: 600,
+          color: pal.inkMute,
+          letterSpacing: '0.08em', textTransform: 'uppercase',
+          marginBottom: 8,
+        }}>Quick start</div>
+        <div style={{
+          display: 'flex',
+          gap: 8,
+          flexWrap: 'wrap',
+          marginBottom: 22,
+        }}>
+          {VIBE_PRESETS.map((p) => {
+            const isActive = activePreset === p.id;
+            return (
+              <button
+                key={p.id}
+                onClick={() => applyPreset(p)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: '8px 12px',
+                  borderRadius: T2.radii.pill,
+                  border: `1.5px solid ${isActive ? pal.terracotta : pal.line}`,
+                  background: isActive ? pal.terracottaL : pal.creamSoft,
+                  color: isActive ? pal.terracottaD : pal.ink,
+                  fontFamily: 'Inter, sans-serif',
+                  fontSize: 13, fontWeight: 600,
+                  cursor: 'pointer',
+                  letterSpacing: '-0.01em',
+                }}>
+                <span style={{ fontSize: 15, lineHeight: 1 }}>{p.emoji}</span>
+                {p.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Icon chip grid — 10 categories */}
         <div style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(4, 1fr)',
@@ -1789,6 +1991,14 @@ function RecsScreen({ vibe, density, currentGroup, onBack, onLockedIn, votes, se
   const setVote = (id, vote) => {
     setVotes((prev) => ({ ...prev, [id]: prev[id] === vote ? null : vote }));
     if (!vote) return;
+    // Haptic feedback — yay = warm double-pulse, nahh = short single buzz.
+    // Best-effort: navigator.vibrate is iOS-Safari-supported as of 16+ and
+    // Android everywhere; a missing API just silently no-ops.
+    try {
+      if (navigator.vibrate) {
+        navigator.vibrate(vote === 'yay' ? [25, 30, 35] : 18);
+      }
+    } catch (e) { /* unsupported */ }
     // Fire the vote in the background. Failures are non-fatal — the vote
     // still updates locally even if the network drops. In group mode we
     // route through /groups/{id}/vote so other members' phones see it on
@@ -1866,7 +2076,7 @@ function RecsScreen({ vibe, density, currentGroup, onBack, onLockedIn, votes, se
                 boxShadow: tab === k ? '0 1px 3px rgba(0,0,0,0.06)' : 'none',
                 textTransform: 'capitalize',
               }}>
-              {k} · {k === 'places' ? venues.length : events.length}
+              {k} · <Count to={k === 'places' ? venues.length : events.length} />
             </button>
           ))}
         </div>
@@ -2043,7 +2253,15 @@ function GroupDecisionScreen({ vibe, votes, onBack, onMemories, onWentThere, rec
       footer={
         <div style={{ display: 'flex', gap: 10 }}>
           <button
-            onClick={() => (onWentThere ? onWentThere(locked) : onMemories && onMemories())}
+            onClick={() => {
+              // Celebrate: confetti + 3-pulse buzz + toast. The confetti is
+              // fired via window.plotConfetti() which is hosted at app root,
+              // so the burst keeps rendering even after we navigate away.
+              try { window.plotConfetti && window.plotConfetti(); } catch (e) { /* unsupported */ }
+              try { navigator.vibrate && navigator.vibrate([30, 40, 50]); } catch (e) { /* unsupported */ }
+              try { window.plotToast && window.plotToast('Memory saved 🎉', 'success'); } catch (e) { /* unsupported */ }
+              onWentThere ? onWentThere(locked) : onMemories && onMemories();
+            }}
             style={{
               flex: 1, height: 52,
               borderRadius: vibe === 'playful' ? T2.radii.lg : T2.radii.pill,
@@ -2301,18 +2519,25 @@ function MemoriesScreen({ vibe, onBack }) {
   const [open, setOpen] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState(null);
-  const fileInputRef = React.useRef(null);
+  // 'environment' = back camera, 'user' = front (selfie). Persisted in state
+  // so the toggle survives modal opens. Two parallel hidden inputs let the
+  // browser pick the right camera the moment user taps.
+  const [cameraFacing, setCameraFacing] = useState('environment');
+  const fileInputBackRef = React.useRef(null);
+  const fileInputFrontRef = React.useRef(null);
   const targetMemoryRef = React.useRef(null);
 
-  // Trigger the hidden <input type=file> for a specific memory.
-  // accept=image/* + capture=environment hints to mobile browsers to
-  // open the camera (with a "Photo Library" alternative on iOS).
+  // Trigger the hidden <input type=file> for a specific memory. We have two
+  // inputs (one capture=environment, one capture=user) and pick which to
+  // click based on the cameraFacing state — that's the only reliable way
+  // to swap camera direction since the capture attribute is read at click.
   function startAddPhoto(memory) {
     targetMemoryRef.current = memory;
     setUploadError(null);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-      fileInputRef.current.click();
+    const ref = cameraFacing === 'user' ? fileInputFrontRef : fileInputBackRef;
+    if (ref.current) {
+      ref.current.value = '';
+      ref.current.click();
     }
   }
 
@@ -2329,6 +2554,7 @@ function MemoriesScreen({ vibe, onBack }) {
       setMemories(fresh);
       const updated = fresh.find((m) => m.id === target.id);
       if (open && open.id === target.id && updated) setOpen(updated);
+      try { window.plotToast && window.plotToast('Photo saved 📸', 'success'); } catch (e) { /* ignore */ }
     } catch (err) {
       setUploadError(String(err.message || err));
     } finally {
@@ -2345,6 +2571,35 @@ function MemoriesScreen({ vibe, onBack }) {
           padding: 4, color: pal.ink, fontSize: 22, fontFamily: 'inherit',
         }}>←</button>
         <SectionLabel vibe={vibe}>Memories</SectionLabel>
+        {/* Camera-direction toggle. Sits on the right of the header so it's
+            visible whenever the user is about to tap a photo button. The
+            current direction is reflected by which side of the pill is filled. */}
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <button
+            type="button"
+            aria-label="Toggle camera direction"
+            onClick={() => setCameraFacing((f) => (f === 'environment' ? 'user' : 'environment'))}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 4,
+              padding: '6px 10px',
+              borderRadius: T2.radii.pill,
+              border: `1px solid ${pal.line}`,
+              background: pal.creamSoft,
+              color: pal.ink,
+              fontFamily: 'inherit',
+              fontSize: 12, fontWeight: 600,
+              cursor: 'pointer',
+            }}>
+            <span style={{
+              display: 'inline-block',
+              width: 20, textAlign: 'center',
+              transform: cameraFacing === 'user' ? 'scaleX(-1)' : 'none',
+            }}>📷</span>
+            <span style={{ letterSpacing: '0.02em' }}>
+              {cameraFacing === 'user' ? 'Selfie' : 'Back'}
+            </span>
+          </button>
+        </div>
       </div>
 
       <div style={{ padding: '0 24px', marginBottom: 18 }}>
@@ -2356,7 +2611,7 @@ function MemoriesScreen({ vibe, onBack }) {
           textWrap: 'pretty',
         }}>
           {memories.length === 0
-            ? 'No memories yet.'
+            ? 'Nothing here yet.'
             : `${memories.length} hangout${memories.length === 1 ? '' : 's'} so far.`}
         </div>
         {uploadError && (
@@ -2393,7 +2648,7 @@ function MemoriesScreen({ vibe, onBack }) {
             fontSize: 13,
             textAlign: 'center',
           }}>
-            No memories yet. Get out there. Tap "We went →" after a hangout and it lands here.
+            📸 Your hangout receipts live here. Tap "We went →" after a plan and it lands here — bad decisions encouraged.
           </div>
         </div>
       ) : (
@@ -2415,14 +2670,22 @@ function MemoriesScreen({ vibe, onBack }) {
         </div>
       )}
 
-      {/* Hidden file input — triggered by the per-tile camera button.
-          capture=environment makes mobile browsers default to the camera;
-          users can still pick from their library via the same dialog. */}
+      {/* Two hidden file inputs — one for each camera direction. We can't
+          dynamically change the capture attribute after click; React renders
+          both and startAddPhoto clicks whichever matches cameraFacing. */}
       <input
-        ref={fileInputRef}
+        ref={fileInputBackRef}
         type="file"
         accept="image/*"
         capture="environment"
+        onChange={handleFileSelected}
+        style={{ display: 'none' }}
+      />
+      <input
+        ref={fileInputFrontRef}
+        type="file"
+        accept="image/*"
+        capture="user"
         onChange={handleFileSelected}
         style={{ display: 'none' }}
       />

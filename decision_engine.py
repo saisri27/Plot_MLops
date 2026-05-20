@@ -53,9 +53,11 @@ try:
         create_group,
         get_group,
         get_group_by_token,
+        delete_group,
         get_llm_cost_summary,
         get_user,
         join_group,
+        leave_group,
         list_user_groups,
         log_feedback,
         log_recommendation_request,
@@ -230,11 +232,20 @@ class CreateGroupRequest(BaseModel):
     creator_display_name: str | None = Field(
         default=None, description="Optional display name for the host"
     )
+    event_date: str | None = Field(
+        default=None,
+        description="Optional planned meetup date as ISO 'YYYY-MM-DD'. Drives the UI's "
+        "'Meetup: <date>' chip and the group expiration logic.",
+    )
 
 
 class JoinGroupRequest(BaseModel):
     user_id: str = Field(..., min_length=1)
     display_name: str = Field(..., min_length=1, max_length=40)
+
+
+class LeaveGroupRequest(BaseModel):
+    user_id: str = Field(..., min_length=1)
 
 
 class SetGroupPrefsRequest(BaseModel):
@@ -824,7 +835,11 @@ def groups_create(request: CreateGroupRequest):
     """
     _require_db()
     try:
-        group = create_group(name=request.name, created_by=request.creator_user_id)
+        group = create_group(
+            name=request.name,
+            created_by=request.creator_user_id,
+            event_date=request.event_date,
+        )
         if request.creator_display_name:
             join_group(
                 group_id=str(group["id"]),
@@ -871,6 +886,47 @@ def groups_join(group_id: str, request: JoinGroupRequest):
         return {"status": "joined", "group_id": group_id, "user_id": request.user_id}
     except Exception as exc:
         logger.exception("join_group failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"DB write failed: {exc}") from exc
+
+
+@app.post("/groups/{group_id}/leave")
+def groups_leave(group_id: str, request: LeaveGroupRequest):
+    """Remove a member from a group. Idempotent — returns 200 either way."""
+    _require_db()
+    try:
+        removed = leave_group(group_id=group_id, user_id=request.user_id)
+        return {
+            "status": "left" if removed else "not_a_member",
+            "group_id": group_id,
+            "user_id": request.user_id,
+        }
+    except Exception as exc:
+        logger.exception("leave_group failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"DB write failed: {exc}") from exc
+
+
+@app.post("/groups/{group_id}/delete")
+def groups_delete(group_id: str, request: LeaveGroupRequest):
+    """
+    Permanently delete a group (creator-only). 403 if user is not the
+    creator, 404 if the group doesn't exist. CASCADE cleans members + votes.
+    Reuses LeaveGroupRequest since the body is identical (just user_id).
+    """
+    _require_db()
+    try:
+        outcome = delete_group(group_id=group_id, user_id=request.user_id)
+        if outcome == "not_found":
+            raise HTTPException(status_code=404, detail="Group not found.")
+        if outcome == "forbidden":
+            raise HTTPException(
+                status_code=403,
+                detail="Only the group creator can delete this group.",
+            )
+        return {"status": "deleted", "group_id": group_id}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("delete_group failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"DB write failed: {exc}") from exc
 
 

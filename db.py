@@ -157,6 +157,11 @@ CREATE TABLE IF NOT EXISTS groups (
 CREATE INDEX IF NOT EXISTS idx_groups_invite_token ON groups(invite_token);
 CREATE INDEX IF NOT EXISTS idx_groups_created_by   ON groups(created_by);
 
+-- event_date added later: the planned meetup day. Nullable because not every
+-- group has a fixed date yet (e.g. "spontaneous weekend hang"). Used by the
+-- UI to show "Meetup: May 20" on group cards and to compute expiration.
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS event_date DATE;
+
 -- One row per (group, member). Composite primary key prevents the same
 -- person joining twice. `prefs` stores the member's per-group prefs as
 -- JSON (budget, categories, max_distance_km) so we can merge across
@@ -533,17 +538,19 @@ def _new_invite_token() -> str:
     return secrets.token_urlsafe(6)
 
 
-def create_group(name: str, created_by: str) -> dict[str, Any]:
+def create_group(name: str, created_by: str, event_date: str | None = None) -> dict[str, Any]:
     """
     Mint a new group + invite token. The creator is added as the first member
     in the same transaction so they immediately show up in /groups/{id}.
-    Returns {id, name, invite_token, created_by, created_at}.
+    `event_date` is the optional planned-meetup day (ISO 'YYYY-MM-DD'); when
+    set, the UI uses it to compute expiration and show "Meetup: <date>".
+    Returns {id, name, invite_token, created_by, created_at, event_date}.
     """
     token = _new_invite_token()
     sql_insert = """
-        INSERT INTO groups (name, invite_token, created_by)
-        VALUES (%s, %s, %s)
-        RETURNING id, name, invite_token, created_by, created_at;
+        INSERT INTO groups (name, invite_token, created_by, event_date)
+        VALUES (%s, %s, %s, %s)
+        RETURNING id, name, invite_token, created_by, created_at, event_date;
     """
     sql_member = """
         INSERT INTO group_members (group_id, user_id, display_name)
@@ -551,7 +558,7 @@ def create_group(name: str, created_by: str) -> dict[str, Any]:
         ON CONFLICT (group_id, user_id) DO NOTHING;
     """
     with _get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(sql_insert, (name, token, created_by))
+        cur.execute(sql_insert, (name, token, created_by, event_date))
         row = cur.fetchone()
         # Use the creator's user_id as their first display_name placeholder;
         # they'll typically rename via the home/profile screen.
@@ -594,6 +601,45 @@ def join_group(group_id: str, user_id: str, display_name: str) -> None:
     with _get_conn() as conn, conn.cursor() as cur:
         cur.execute(sql, (group_id, user_id, display_name))
         conn.commit()
+
+
+def delete_group(group_id: str, user_id: str) -> str:
+    """
+    Delete a group. ONLY the creator can delete — anyone else gets a
+    'forbidden' string back. ON DELETE CASCADE on group_members and
+    group_votes cleans up child rows in the same transaction.
+
+    Returns:
+        'deleted'    — group was removed
+        'forbidden'  — group exists but the user is not its creator
+        'not_found'  — no group with that id
+    """
+    with _get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT created_by FROM groups WHERE id = %s;", (group_id,))
+        row = cur.fetchone()
+        if not row:
+            return "not_found"
+        if row[0] != user_id:
+            return "forbidden"
+        cur.execute("DELETE FROM groups WHERE id = %s;", (group_id,))
+        conn.commit()
+    return "deleted"
+
+
+def leave_group(group_id: str, user_id: str) -> bool:
+    """
+    Remove a user from a group. Returns True if a row was deleted, False if
+    the user wasn't a member to begin with. The group itself stays — only
+    the membership row is removed. Cascading deletes on group_votes are
+    handled at the FK level when group is deleted; we don't touch votes
+    here since past votes are still useful history.
+    """
+    sql = "DELETE FROM group_members WHERE group_id = %s AND user_id = %s;"
+    with _get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, (group_id, user_id))
+        deleted = cur.rowcount
+        conn.commit()
+    return bool(deleted)
 
 
 def set_member_prefs(group_id: str, user_id: str, prefs: dict[str, Any]) -> None:
@@ -695,7 +741,8 @@ def record_group_vote(
 def list_user_groups(user_id: str) -> list[dict[str, Any]]:
     """Groups this user belongs to, newest first. Used by HomeScreen."""
     sql = """
-        SELECT g.id, g.name, g.invite_token, g.last_rec_id, g.created_at,
+        SELECT g.id, g.name, g.invite_token, g.created_by, g.last_rec_id,
+               g.created_at, g.event_date,
                COUNT(gm2.user_id) AS member_count
         FROM groups g
         JOIN group_members gm ON gm.group_id = g.id AND gm.user_id = %s
